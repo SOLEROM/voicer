@@ -25,6 +25,7 @@ charset-normalizer @ file:///home/conda/feedstock_root/build_artifacts/charset-n
 click @ file:///home/conda/feedstock_root/build_artifacts/click_1692311806742/work
 cloudpathlib @ file:///home/conda/feedstock_root/build_artifacts/cloudpathlib-meta_1697837790453/work
 colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1666700638685/work
+coloredlogs==15.0.1
 comm==0.2.2
 conda @ file:///home/conda/feedstock_root/build_artifacts/conda_1708705567884/work
 conda-libmamba-solver @ file:///home/conda/feedstock_root/build_artifacts/conda-libmamba-solver_1706566000184/work/src
@@ -62,6 +63,7 @@ google-pasta @ file:///Users/ktietz/demo/mc3/conda-bld/google-pasta_163057799135
 greenlet==3.0.3
 grpcio @ file:///home/conda/feedstock_root/build_artifacts/grpc-split_1700258025969/work
 h5py @ file:///home/conda/feedstock_root/build_artifacts/h5py_1702471429234/work
+humanfriendly==10.0
 idna @ file:///home/conda/feedstock_root/build_artifacts/idna_1701026962277/work
 ifaddr==0.2.0
 imagesize==1.4.1
@@ -124,6 +126,8 @@ nvidia-nccl-cu12==2.21.5
 nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
 oauthlib @ file:///croot/oauthlib_1679489621486/work
+onnx==1.17.0
+onnxruntime==1.20.1
 opt-einsum @ file:///home/conda/feedstock_root/build_artifacts/opt_einsum_1696448916724/work
 packaging @ file:///home/conda/feedstock_root/build_artifacts/packaging_1710075952259/work
 pandas @ file:///home/conda/feedstock_root/build_artifacts/pandas_1708708607448/work

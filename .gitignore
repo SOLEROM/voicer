@@ -2,3 +2,4 @@ redimnet/RedimNet
 pyvoice_venv
 /redimnet/models
 *.wav
+*.onnx

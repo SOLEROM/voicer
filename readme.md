@@ -1,7 +1,12 @@
+# About
+
+```
+python -m venv pyvoice_venv
+source pyvoice_venv/bin/activate
 
 >python --version Python 3.10.14
 pip freeze > requirements.txt
-
+```
 
 ## small
 
