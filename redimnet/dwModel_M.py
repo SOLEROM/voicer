@@ -1,10 +1,15 @@
 import torch
 
-model_name='M' # ~b3-b4 size
-train_type='ft_mix'
-dataset='vb2+vox2+cnc'
+# model_name='M' # ~b3-b4 size
+# train_type='ft_mix'
+# dataset='vb2+vox2+cnc'
 
-torch.hub.set_dir('/data/deep/redimnet/models')
+model_name='b2' # ~b2
+train_type='ptn'
+dataset='vox2'
+
+
+torch.hub.set_dir('/data/proj/voice/redimnet/models')
 
 model = torch.hub.load('IDRnD/ReDimNet', 'ReDimNet', 
                        model_name=model_name, 
@@ -12,5 +17,6 @@ model = torch.hub.load('IDRnD/ReDimNet', 'ReDimNet',
                        dataset=dataset)
 
 model.eval()
+
 
 

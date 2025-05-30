@@ -37,7 +37,7 @@ example:
 ```
 >python dwModel_M.py                
 Downloading: "https://github.com/IDRnD/ReDimNet/releases/download/latest/M-vb2+vox2+cnc-ft_mix.pt" to 
-/data/deep/redimnet/models/checkpoints/M-vb2+vox2+cnc-ft_mix.pt
+/data/proj/voice/redimnet/models/checkpoints/M-vb2+vox2+cnc-ft_mix.pt
 ```
 
 
