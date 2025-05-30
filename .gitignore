@@ -3,3 +3,4 @@ pyvoice_venv
 /redimnet/models
 *.wav
 *.onnx
+/redimnet/cal
