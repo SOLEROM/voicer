@@ -65,80 +65,65 @@ def mel_filterbank(sr, n_fft, n_mels, f_min, f_max):
 #  LOG-MEL GENERATOR  (matches ReDimNet “MelBanks” parameters)
 # ----------------------------------------------------------------------
 def compute_logmel(
-        wave:      np.ndarray,
-        sr:        int   = 16000,
-        n_fft:     int   = 512,
-        win_len:   int   = 400,
-        hop:       int   = 160,
-        n_mels:    int   = 60,
-        f_min:     float = 20.,
-        f_max:     float = 7600.,
-        target_T:  int   = 200,
-        do_preemph: bool = True,
-        norm_signal: bool = False,
+    wave: np.ndarray,
+    sr: int = 16000,
+    n_fft: int = 512,
+    win_len: int = 400,
+    hop: int = 160,
+    n_mels: int = 60,
+    f_min: float = 20.,
+    f_max: float = 7600.,
+    target_T: int = 200,
+    do_preemph: bool = True,
 ) -> np.ndarray:
     """
-    Returns a tensor shaped [1, 1, n_mels, target_T] (NCHW, fp32).
+    Return shape: [1, 1, n_mels, target_T] — float32
     """
-
-    # 0) (Optional) global-signal normalisation – disabled for this model
-    if norm_signal:
-        wave = wave / (np.max(np.abs(wave)) + EPS)
 
     # 1) Optional pre-emphasis
     if do_preemph:
         wave = preemphasis(wave, alpha=0.97)
 
-    # 2) STFT:  centre=True behaviour replicated by symmetric padding
+    # 2) Padding for centered STFT
     pad = n_fft // 2
     wave_padded = np.pad(wave, (pad, pad), mode="reflect")
 
-    # win = get_window("hann", win_len, fftbins=True).astype(np.float32)
+    # 3) Create window (Hamming like PyTorch)
     win = get_window("hamming", win_len, fftbins=True).astype(np.float32)
-    
-    win = np.pad(win, (0, n_fft - win_len))        # zero-pad to n_fft
+    win = np.pad(win, (0, n_fft - win_len))  # zero-pad to match n_fft
 
+    # 4) Frame-by-frame STFT power
     frames = []
     for start in range(0, len(wave_padded) - n_fft + 1, hop):
         frame = wave_padded[start:start + n_fft] * win
-        # power spectrum (|FFT|²) – matches MelSpectrogram(power=2.0)
-        spec = np.abs(rfft(frame, n=n_fft)) ** 2
+        spec  = np.abs(rfft(frame, n=n_fft)) ** 2
         frames.append(spec)
 
     if not frames:
         raise RuntimeError("❌ Audio too short for one FFT frame")
 
-    spec = np.stack(frames, axis=1)                        # (freq, time)
+    spec = np.stack(frames, axis=1)  # shape: [n_freq_bins, frames]
 
-    # 3) Mel filterbank → Mel power-spectrogram
-    mel_fb  = mel_filterbank(sr, n_fft, n_mels, f_min, f_max)
-    mel_pow = mel_fb @ spec + EPS
+    # 5) Mel filterbank
+    mel_fb = mel_filterbank(sr, n_fft, n_mels, f_min, f_max)
+    mel    = mel_fb @ spec  # shape: [n_mels, frames]
 
-    # 4) dB scaling (10·log10)  +  clamp to top_db (80)
-    logmel = 10.0 * np.log10(mel_pow)
-    
-    
-    logmel -= np.max(logmel)                  # peak-normalise
-    logmel = np.maximum(logmel, -80.0)        # top_db = 80
+    # 6) Log scale (natural log, not dB)
+    logmel = np.log(mel + EPS)  # match PyTorch's torchaudio behavior
 
-    # 5) Pad or centre-crop to exactly 200 frames
+    # 7) Crop or pad to target frame count
     T = logmel.shape[1]
     if T < target_T:
-        pad_width = target_T - T
-        logmel = np.pad(logmel, ((0, 0), (0, pad_width)), mode="constant")
-        print(f"Padding logmel: {T} → {target_T} frames")
+        logmel = np.pad(logmel, ((0, 0), (0, target_T - T)), mode="constant")
     elif T > target_T:
         start = (T - target_T) // 2
         logmel = logmel[:, start:start + target_T]
-        print(f"Cropping logmel: {T} → {target_T} frames")
 
-    # 6) CMVN *per mel band*  (spec_norm lambda in ReDimNet)
-    mean = logmel.mean(axis=1, keepdims=True)
-    std  = logmel.std (axis=1, keepdims=True)
-    logmel = (logmel - mean) / (std + EPS)
+    # 8) Mean normalize per channel (no CMVN, just subtract mean like torch)
+    logmel = logmel - logmel.mean(axis=1, keepdims=True)
 
-    # 7) Return in NCHW order
-    return logmel[np.newaxis, np.newaxis, :, :].astype(np.float32)  # [1,1,M,T]
+    # 9) Return as [1, 1, n_mels, target_T] float32
+    return logmel[np.newaxis, np.newaxis, :, :].astype(np.float32)
 
 
 # ----------------------------------------------------------------------
