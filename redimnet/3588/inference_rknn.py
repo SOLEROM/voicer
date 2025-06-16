@@ -1,134 +1,199 @@
+#!/usr/bin/env python3
+"""
+inference_rknn.py – Rockchip RKNN inference for ReDimNet checkpoints
+
+Usage:
+    python inference_rknn.py  model.rknn  audio.wav
+"""
+
+import os
+import sys
+import math
 import numpy as np
 import soundfile as sf
 from scipy.signal import get_window, resample
-from scipy.fftpack import fft
-from rknn.api import RKNN
+from numpy.fft    import rfft
+from rknn.api     import RKNN
 
-import os
-os.environ['RKNN_LOG_LEVEL'] = '3'
-# ========================== DSP HELPERS ==========================
+# ----------------------------------------------------------------------
+#  Global RKNN log level
+# ----------------------------------------------------------------------
+os.environ["RKNN_LOG_LEVEL"] = "3"
 
-def preemphasis(signal, alpha=0.97):
-    return np.append(signal[0], signal[1:] - alpha * signal[:-1])
+# ----------------------------------------------------------------------
+#  DSP HELPERS
+# ----------------------------------------------------------------------
+EPS = 1e-8           # small constant to avoid /0 and log(0)
 
-def hz_to_mel(hz):
-    return 2595 * np.log10(1 + hz / 700.0)
+
+def preemphasis(wave, alpha: float = 0.97) -> np.ndarray:
+    """ y[n] = x[n] − α·x[n−1]   (first sample unchanged) """
+    out = wave.copy()
+    out[1:] -= alpha * wave[:-1]
+    return out
+
+
+def hz_to_mel(hz):            # HTK formula
+    return 2595.0 * np.log10(1 + hz / 700.0)
+
 
 def mel_to_hz(mel):
-    return 700 * (10 ** (mel / 2595.0) - 1)
+    return 700.0 * (10 ** (mel / 2595.0) - 1)
 
-def mel_filterbank(sr, n_fft, n_mels, fmin, fmax):
-    mel_points = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_mels + 2)
-    hz_points = mel_to_hz(mel_points)
-    bin_points = np.floor((n_fft + 1) * hz_points / sr).astype(int)
 
-    fb = np.zeros((n_mels, n_fft // 2 + 1))
+def mel_filterbank(sr, n_fft, n_mels, f_min, f_max):
+    """Returns an (n_mels × (n_fft//2+1)) triangular filterbank."""
+    mel_pts = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels + 2)
+    hz_pts  = mel_to_hz(mel_pts)
+    bins    = np.floor((n_fft + 1) * hz_pts / sr).astype(int)
+
+    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
     for i in range(1, n_mels + 1):
-        start, center, end = bin_points[i - 1], bin_points[i], bin_points[i + 1]
-        end = min(end, fb.shape[1])
-        for j in range(start, center):
-            fb[i - 1, j] = (j - start) / max(center - start, 1)
-        for j in range(center, end):
-            fb[i - 1, j] = (end - j) / max(end - center, 1)
+        left, center, right = bins[i - 1], bins[i], bins[i + 1]
+        right = min(right, fb.shape[1] - 1)        # safety clip
+
+        # rising slope
+        fb[i - 1, left:center] = (
+            np.arange(left, center) - left) / max(center - left, 1)
+        # falling slope
+        fb[i - 1, center:right] = (
+            right - np.arange(center, right)) / max(right - center, 1)
     return fb
 
-# ========================== LOG-MEL ==========================
 
-def pad_or_crop(logmel, target_frames=200):
-    n_mels, frames = logmel.shape
-    if frames < target_frames:
-        pad = np.zeros((n_mels, target_frames - frames))
-        logmel = np.concatenate((logmel, pad), axis=1)
-        print(f"Padding logmel from {frames} to {target_frames}")
-    elif frames > target_frames:
-        start = (frames - target_frames) // 2
-        logmel = logmel[:, start:start + target_frames]
-        print(f"Cropping logmel from {frames} to {target_frames}")
-    return logmel
+# ----------------------------------------------------------------------
+#  LOG-MEL GENERATOR  (matches ReDimNet “MelBanks” parameters)
+# ----------------------------------------------------------------------
+def compute_logmel(
+        wave:      np.ndarray,
+        sr:        int   = 16000,
+        n_fft:     int   = 512,
+        win_len:   int   = 400,
+        hop:       int   = 160,
+        n_mels:    int   = 60,
+        f_min:     float = 20.,
+        f_max:     float = 7600.,
+        target_T:  int   = 200,
+        do_preemph: bool = True,
+        norm_signal: bool = False,
+) -> np.ndarray:
+    """
+    Returns a tensor shaped [1, 1, n_mels, target_T] (NCHW, fp32).
+    """
 
-def compute_logmel(waveform, sr=16000, n_fft=512, hop_length=160, n_mels=60,
-                   fmin=20.0, fmax=8000.0, target_frames=200, preemphasis_alpha=0.97):
-    waveform = waveform.astype(np.float32)
-    waveform = waveform / (np.max(np.abs(waveform)) + 1e-8)
-    waveform = preemphasis(waveform, alpha=preemphasis_alpha)
+    # 0) (Optional) global-signal normalisation – disabled for this model
+    if norm_signal:
+        wave = wave / (np.max(np.abs(wave)) + EPS)
 
-    window = get_window('hann', n_fft, fftbins=True)
+    # 1) Optional pre-emphasis
+    if do_preemph:
+        wave = preemphasis(wave, alpha=0.97)
+
+    # 2) STFT:  centre=True behaviour replicated by symmetric padding
+    pad = n_fft // 2
+    wave_padded = np.pad(wave, (pad, pad), mode="reflect")
+
+    # win = get_window("hann", win_len, fftbins=True).astype(np.float32)
+    win = get_window("hamming", win_len, fftbins=True).astype(np.float32)
+    
+    win = np.pad(win, (0, n_fft - win_len))        # zero-pad to n_fft
+
     frames = []
-    for start in range(0, len(waveform) - n_fft + 1, hop_length):
-        frame = waveform[start:start + n_fft] * window
-        spec = np.abs(fft(frame)[:n_fft // 2 + 1]) ** 2
+    for start in range(0, len(wave_padded) - n_fft + 1, hop):
+        frame = wave_padded[start:start + n_fft] * win
+        # power spectrum (|FFT|²) – matches MelSpectrogram(power=2.0)
+        spec = np.abs(rfft(frame, n=n_fft)) ** 2
         frames.append(spec)
 
     if not frames:
-        raise ValueError("Audio too short for even one FFT frame")
+        raise RuntimeError("❌ Audio too short for one FFT frame")
 
-    spec = np.stack(frames, axis=1)
-    mel_fb = mel_filterbank(sr, n_fft, n_mels, fmin, fmax)
-    mel_spec = np.dot(mel_fb, spec)
-    mel_spec = np.maximum(mel_spec, 1e-6)
+    spec = np.stack(frames, axis=1)                        # (freq, time)
 
-    logmel = np.log(mel_spec)
-    logmel = pad_or_crop(logmel, target_frames)
+    # 3) Mel filterbank → Mel power-spectrogram
+    mel_fb  = mel_filterbank(sr, n_fft, n_mels, f_min, f_max)
+    mel_pow = mel_fb @ spec + EPS
 
-    # Standardization (identity for now)
-    logmel = (logmel - 0.0) / 1.0
+    # 4) dB scaling (10·log10)  +  clamp to top_db (80)
+    logmel = 10.0 * np.log10(mel_pow)
+    
+    
+    logmel -= np.max(logmel)                  # peak-normalise
+    logmel = np.maximum(logmel, -80.0)        # top_db = 80
 
-    print(f"[DEBUG] logmel shape = {logmel.shape}")
-    return logmel[np.newaxis, np.newaxis, :, :]  # NCHW: [1, 1, n_mels, frames]
+    # 5) Pad or centre-crop to exactly 200 frames
+    T = logmel.shape[1]
+    if T < target_T:
+        pad_width = target_T - T
+        logmel = np.pad(logmel, ((0, 0), (0, pad_width)), mode="constant")
+        print(f"Padding logmel: {T} → {target_T} frames")
+    elif T > target_T:
+        start = (T - target_T) // 2
+        logmel = logmel[:, start:start + target_T]
+        print(f"Cropping logmel: {T} → {target_T} frames")
 
-# ========================== INFERENCE ==========================
+    # 6) CMVN *per mel band*  (spec_norm lambda in ReDimNet)
+    mean = logmel.mean(axis=1, keepdims=True)
+    std  = logmel.std (axis=1, keepdims=True)
+    logmel = (logmel - mean) / (std + EPS)
 
-def run_inference_rknn(rknn_path, wav_path):
-    print("[1/4] Loading RKNN model...")
+    # 7) Return in NCHW order
+    return logmel[np.newaxis, np.newaxis, :, :].astype(np.float32)  # [1,1,M,T]
+
+
+# ----------------------------------------------------------------------
+#  RKNN INFERENCE
+# ----------------------------------------------------------------------
+def run_inference_rknn(rknn_path: str, wav_path: str):
+    print("[1/4] Loading RKNN model …")
     rknn = RKNN()
     if rknn.load_rknn(rknn_path) != 0:
-        raise RuntimeError("❌ Failed to load RKNN")
+        raise RuntimeError("❌ Failed to load RKNN file")
 
-    print("[2/4] Initializing runtime...")
-    if rknn.init_runtime(target='rk3588') != 0:
-        raise RuntimeError("❌ Failed to init runtime")
+    print("[2/4] Initialising runtime …")
+    if rknn.init_runtime(target="rk3588") != 0:
+        raise RuntimeError("❌ Failed to initialise RKNN runtime")
 
-    print("[3/4] Preprocessing audio...")
-    waveform, sr = sf.read(wav_path)
-    if waveform.ndim > 1:
-        waveform = waveform.mean(axis=1)
+    # ------------------------------------------------------------------
+    #  AUDIO PRE-PROCESS
+    # ------------------------------------------------------------------
+    print("[3/4] Pre-processing audio …")
+    wave, sr = sf.read(wav_path)                     # ndarray, shape (N,) or (N, C)
+    if wave.ndim > 1:                               # stereo → mono
+        wave = wave.mean(axis=1)
+    wave = wave.astype(np.float32)
 
-    target_sr = 16000
-    if sr != target_sr:
-        print(f"[INFO] Resampling from {sr} Hz to {target_sr} Hz...")
-        duration_sec = len(waveform) / sr
-        target_len = int(duration_sec * target_sr)
-        waveform = resample(waveform, target_len)
-        sr = target_sr
+    # Resample if needed
+    TARGET_SR = 16000
+    if sr != TARGET_SR:
+        print(f"[INFO] Resampling {sr} → {TARGET_SR} Hz")
+        duration = len(wave) / sr
+        wave = resample(wave, int(duration * TARGET_SR))
+        sr = TARGET_SR
 
-    logmel_nchw = compute_logmel(waveform, sr=sr)  # [1, 1, 60, 200]
-    logmel_nhwc = np.transpose(logmel_nchw, (0, 2, 3, 1))  # [1, 60, 200, 1]
+    logmel_nchw = compute_logmel(wave, sr=sr)       # [1,1,60,200]
+    logmel_nhwc = np.transpose(logmel_nchw, (0, 2, 3, 1))  # [1,60,200,1]
 
-    print("[4/4] Running inference...")
-    input_tensor = logmel_nhwc.astype(np.float32)
-    outputs = rknn.inference(inputs=[input_tensor])
+    # ------------------------------------------------------------------
+    #  INFERENCE
+    # ------------------------------------------------------------------
+    print("[4/4] Running inference …")
+    outputs = rknn.inference(inputs=[logmel_nhwc])
     rknn.release()
 
-    embedding = outputs[0]
+    emb = outputs[0]
+    print("\n[DEBUG] Output embedding stats  "
+          f"(shape {emb.shape}):  min={emb.min():.3f}  max={emb.max():.3f}")
+    print("Preview:", emb[0][:10])
 
-    print("\n[DEBUG] RKNN Output Stats:")
-    print(f"Shape: {embedding.shape}")
-    print(f"Min: {np.min(embedding):.4f}, Max: {np.max(embedding):.4f}")
-    if np.isnan(embedding).any():
-        print("⚠️  WARNING: NaN detected in output")
-    if np.isinf(embedding).any():
-        print("⚠️  WARNING: Inf detected in output")
+    return emb
 
-    print("\n✅ Embedding vector preview:")
-    print(embedding[0][:10])  # preview
 
-    return embedding
-
-# ========================== ENTRY ==========================
-
-if __name__ == '__main__':
-    import sys
-    if len(sys.argv) < 3:
-        print("Usage: python inference_rknn.py model.rknn audio.wav")
+# ----------------------------------------------------------------------
+#  CLI
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print(__doc__)
         sys.exit(1)
     run_inference_rknn(sys.argv[1], sys.argv[2])
