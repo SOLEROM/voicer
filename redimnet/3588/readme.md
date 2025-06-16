@@ -1,5 +1,17 @@
 # run on target
 
+## data format
+
+PyTorch default is NCHW:
+
+    Shape: [Batch, Channels, Height, Width]
+onnx model : [B=1, 1, n_mels, time_frames]
+
+
+RKNN default is NHWC:
+
+    Shape: [Batch, Height, Width, Channels]
+
 
 ## 3588
 
