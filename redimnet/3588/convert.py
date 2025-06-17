@@ -85,6 +85,21 @@ def main():
     if rknn.export_rknn(out_path) != 0:
         sys.exit('export failed')
 
+    # -------------------------------------------------
+    # ------ Host-side quick test ---------------------
+    # -------------------------------------------------
+    print('[5/5] init_runtime(target=None)  – host CPU')
+    if rknn.init_runtime(target=None) != 0:
+        sys.exit('init_runtime failed (check Toolkit install)')
+
+    # create a random tensor with the correct shape 
+    dummy = np.random.randn(1, 1, 60, 134).astype(np.float16)
+    outputs = rknn.inference(inputs=[dummy] , data_format='nchw' )
+    print('Host-CPU inference OK  →  got', len(outputs),
+          'output(s);  first output shape:', outputs[0].shape)
+
+
+
     print('✔ RKNN saved at', out_path)
     rknn.release()
 
