@@ -5,17 +5,16 @@ infer_logmel_rknn_fp16.py
 Run a ReDimNet-NoMel RKNN model on a *pre-computed* log-Mel tensor (.npy)
 using **FP-16** throughput.
 
-Typical workflow
-----------------
-# After compute_logmel(wave) returns [1,1,60,200] (NCHW, float32):
+Workflow
+--------
+# After compute_logmel(wave) returns [1,1,60,134] (NCHW, float32):
 np.save("clip_logmel.npy", logmel_nchw.astype(np.float16))
 
 Usage
 -----
 python infer_logmel_rknn_fp16.py  model.rknn  clip_logmel.npy  [rk3588]
 
-The .npy may be float32 or float16 and NCHW or NHWC; it is converted to
-float16 NHWC [B, 60, 200, 1] before inference.
+The .npy file must be NCHW [B,1,60,134], float32 or float16.
 """
 
 # ───────────────────────── Imports ─────────────────────────
@@ -24,29 +23,17 @@ import sys
 import numpy as np
 from rknn.api import RKNN
 
-os.environ["RKNN_LOG_LEVEL"] = "3"
+# os.environ["RKNN_LOG_LEVEL"] = "3"
 
-# ─────────────────── helper: load & prepare ───────────────────
+# ─────────────────── helper: load log-Mel ───────────────────
 def load_logmel(path: str) -> np.ndarray:
     """
-    Loads an .npy file and returns *float16 NHWC* tensor
-    ([B, 60, 200, 1]) ready for RKNN.
+    Load .npy tensor and return float16 **NCHW** [B,1,60,134].
     """
     arr = np.load(path, allow_pickle=False)
-
-    if arr.ndim != 4:
-        raise ValueError(f"{path}: expected 4-D tensor, got {arr.shape}")
-
-    # Convert layout → NHWC if needed
-    if arr.shape[-1] == 1:               # already NHWC
-        nhwc = arr
-    elif arr.shape[1] == 1:              # NCHW → NHWC
-        nhwc = np.transpose(arr, (0, 2, 3, 1))
-    else:
-        raise ValueError(f"{path}: cannot infer channel position")
-
-    # Cast to float16
-    return nhwc.astype(np.float16, copy=False)
+    if arr.ndim != 4 or arr.shape[1] != 1:
+        raise ValueError(f"{path}: expected NCHW [B,1,60,134], got {arr.shape}")
+    return arr.astype(np.float16, copy=False)
 
 # ─────────────────── main routine ───────────────────
 def main(rknn_path: str, npy_path: str, target: str = "rk3588"):
@@ -59,13 +46,12 @@ def main(rknn_path: str, npy_path: str, target: str = "rk3588"):
     if rk.init_runtime(target=target) != 0:
         raise RuntimeError("❌ Failed to initialise RKNN runtime")
 
-    # Load log-Mel tensor
     logmel16 = load_logmel(npy_path)
     print(f"[INFO] log-Mel tensor shape {logmel16.shape}, dtype {logmel16.dtype}")
 
-    # ───────── Run inference ─────────
     print("[3/3] Running inference …")
-    emb16 = rk.inference(inputs=[logmel16])[0].astype(np.float16, copy=False)
+    emb16 = rk.inference(inputs=[logmel16], data_format='nchw')[0] \
+              .astype(np.float16, copy=False)
     rk.release()
 
     print(f"\n✅ Embedding shape: {emb16.shape}, dtype {emb16.dtype}")

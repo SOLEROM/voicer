@@ -28,7 +28,7 @@ _HOP      = 240
 _N_MELS   = 60
 _F_MIN    = 20.0
 _F_MAX    = 7_600.0
-_TARGET_T = 200
+_TARGET_T = 134
 _EPS      = 1e-6
 
 # ────────────────────────── DSP helper functions ──────────────────────────
@@ -48,7 +48,7 @@ def mel_filterbank(sr=_SR, n_fft=_N_FFT, n_mels=_N_MELS,
     hz_pts  = mel_to_hz(mel_pts)
     bins    = np.floor((n_fft + 1) * hz_pts / sr).astype(int)
 
-    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
+    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float16)
     for i in range(1, n_mels + 1):
         left, center, right = bins[i - 1], bins[i], bins[i + 1]
         right = min(right, fb.shape[1] - 1)
@@ -65,7 +65,7 @@ def mel_filterbank(sr=_SR, n_fft=_N_FFT, n_mels=_N_MELS,
 # Pre-compute filterbank and window once
 _MEL_FB = mel_filterbank()
 _WINDOW = np.pad(
-    get_window("hamming", _WIN_LEN, fftbins=True).astype(np.float32),
+    get_window("hamming", _WIN_LEN, fftbins=True).astype(np.float16),
     (0, _N_FFT - _WIN_LEN)
 )
 
@@ -78,10 +78,10 @@ def compute_logmel(wave: np.ndarray) -> np.ndarray:
 
     Returns
     -------
-    np.ndarray  shape (1, 1, 60, 200)  – NCHW float32
+    np.ndarray  shape (1, 1, 60, 200)  – NCHW float16
     """
     # 1) pre-emphasis
-    wave = preemphasis(wave).astype(np.float32)
+    wave = preemphasis(wave).astype(np.float16)
 
     # 2) reflection pad (centered STFT)
     pad = _N_FFT // 2
@@ -102,7 +102,7 @@ def compute_logmel(wave: np.ndarray) -> np.ndarray:
     mel = _MEL_FB @ spec                               # [60, T]
 
     # 5) log + mean-norm
-    logmel = np.log(mel + _EPS, dtype=np.float32)
+    logmel = np.log(mel + _EPS, dtype=np.float16)
     logmel -= logmel.mean(axis=1, keepdims=True)
 
     # 6) pad / crop to 200 frames
@@ -115,7 +115,7 @@ def compute_logmel(wave: np.ndarray) -> np.ndarray:
         logmel = logmel[:, start:start + _TARGET_T]
         print(f"[INFO] Cropping log_mel {T} → {_TARGET_T} frames")
 
-    return logmel[np.newaxis, np.newaxis, :, :].astype(np.float32)
+    return logmel[np.newaxis, np.newaxis, :, :].astype(np.float16)
 
 
 # ───────────────────────── Embedding & similarity ──────────────────────────
@@ -129,8 +129,8 @@ def extract_embedding(rknn: RKNN, wav_path: str) -> np.ndarray:
         wave = resample(wave, int(len(wave) * _SR / sr))
 
     logmel_nchw = compute_logmel(wave)                 # [1,1,60,200]
-    logmel_nhwc = np.transpose(logmel_nchw, (0, 2, 3, 1))  # → NHWC
-    emb = rknn.inference(inputs=[logmel_nhwc])[0]
+    
+    emb = rknn.inference(inputs=[logmel_nchw] , data_format='nchw' )[0]
     return emb
 
 

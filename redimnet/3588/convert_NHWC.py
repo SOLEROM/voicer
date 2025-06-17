@@ -61,11 +61,11 @@ def main():
     rknn = RKNN(verbose=True)
 
     print('[1/5] config()')
-    rknn.config(mean_values=[[0]], std_values=[[1]],
+    rknn.config(mean_values=[[0] * 60 ], std_values=[[1] * 60 ], 
                 target_platform=platform, optimization_level=0)
 
     print('[2/5] load_onnx()', onnx_path)
-    if rknn.load_onnx(onnx_path , inputs=['log_mel'], input_size_list=[[1, 1, 60, 134]] ) != 0:
+    if rknn.load_onnx(onnx_path) != 0:
         sys.exit('load_onnx failed')
 
     print('[3/5] build()', 'with quant' if do_quant else 'FP16')
