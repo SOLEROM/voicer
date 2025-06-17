@@ -1,70 +1,79 @@
 #!/usr/bin/env python3
 """
-compare_logmel_to_ref.py
-------------------------
+compare_logmel_to_ref_fp16.py
+-----------------------------
 Compare a pre-computed log-Mel tensor (.npy) against a reference embedding
-(.pt) using a ReDimNet-NoMel RKNN.
+(.pt) using a ReDimNet-NoMel RKNN – **all data passed as float16**.
 
 Usage
 -----
-python compare_logmel_to_ref.py  model.rknn  logmel.npy  ref_embed.pt  [rk3588]
+python compare_logmel_to_ref_fp16.py  model.rknn  logmel.npy  ref_embed.pt  [rk3588]
 
-• `logmel.npy` must contain a float32 tensor shaped either
-  [1, 1, 60, 200] (NCHW) or [1, 60, 200, 1] (NHWC).
-• `ref_embed.pt` must be saved via `torch.save(tensor, path)`.
+Notes
+-----
+• `logmel.npy` may be float32 or float16; it will be converted to float16 NHWC
+  ([1, 60, 200, 1]) before inference.
+• `ref_embed.pt` is expected to have been saved with `torch.save(tensor, path)`
+  (float32 or float16).  It is converted to float16 on load.
+• Cosine similarity is finally computed in float32 for accuracy.
 """
 
-# ─────────────────────────── Imports ────────────────────────────
+# ───────────────────────── Imports ─────────────────────────
 import os
 import sys
 import numpy as np
 from rknn.api import RKNN
-import torch           # only for torch.load()
+import torch                        # only for torch.load()
 
 os.environ["RKNN_LOG_LEVEL"] = "3"
+_EPS = 1e-6                         # for cosine similarity
 
-_EPS = 1e-6            # for cosine similarity
-
-# ──────────────────── helpers ────────────────────
-def load_logmel(npy_path: str) -> np.ndarray:
+# ─────────────────── helper: log-Mel loader ───────────────────
+def load_logmel(path: str) -> np.ndarray:
     """
-    Returns NHWC tensor as float32, shape [B, 60, 200, 1].
-    Accepts either NCHW or NHWC in the file.
+    Returns NHWC float16 tensor, shape [B, 60, 200, 1].
+    Accepts stored NCHW/NHWC, float32/float16.
     """
-    arr = np.load(npy_path, allow_pickle=False)
-    if arr.dtype != np.float32:
-        arr = arr.astype(np.float32)
-
+    arr = np.load(path, allow_pickle=False)
     if arr.ndim != 4:
-        raise ValueError(f"Expected 4-D tensor in {npy_path}, got {arr.shape}")
+        raise ValueError(f"{path}: expected 4-D tensor, got {arr.shape}")
 
-    if arr.shape[-1] == 1:                     # already NHWC
-        return arr
-    if arr.shape[1] == 1:                      # NCHW → NHWC
-        return np.transpose(arr, (0, 2, 3, 1))
+    # Ensure NHWC layout
+    if arr.shape[-1] == 1:          # already NHWC
+        nhwc = arr
+    elif arr.shape[1] == 1:         # NCHW → NHWC
+        nhwc = np.transpose(arr, (0, 2, 3, 1))
+    else:
+        raise ValueError(f"{path}: cannot infer channel position")
 
-    raise ValueError("Tensor layout not recognised "
-                     "(expect [B,1,60,200] or [B,60,200,1]).")
+    return nhwc.astype(np.float16, copy=False)
 
 
-def load_reference_embedding(pt_path: str) -> np.ndarray:
+# ─────────────────── helper: reference loader ───────────────────
+def load_ref_embedding(pt_path: str) -> np.ndarray:
     """
-    Loads a .pt saved via torch.save(tensor, path) and returns a NumPy array.
+    Loads a .pt tensor (float32 or float16) and returns float16 NumPy array.
     """
     try:
         ref = torch.load(pt_path, map_location="cpu")
     except Exception as e:
-        raise RuntimeError(f"Failed to load {pt_path}: {e}")
+        raise RuntimeError(f"Failed to load reference: {e}")
 
     if isinstance(ref, torch.Tensor):
-        return ref.cpu().numpy()
-    return np.asarray(ref, dtype=np.float32)
+        ref = ref.cpu().to(torch.float16).numpy()
+    else:
+        ref = np.asarray(ref, dtype=np.float16)
+
+    return ref
 
 
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    a, b = a.flatten(), b.flatten()
+# ─────────────────── cosine similarity (fp16→fp32) ───────────────────
+def cosine_similarity(a16: np.ndarray, b16: np.ndarray) -> float:
+    a = a16.astype(np.float32, copy=False).flatten()
+    b = b16.astype(np.float32, copy=False).flatten()
     return float(np.dot(a, b) /
                  (np.linalg.norm(a) * np.linalg.norm(b) + _EPS))
+
 
 # ──────────────────── main routine ────────────────────
 def main(rknn_model: str, npy_path: str, ref_pt: str, target: str):
@@ -77,22 +86,23 @@ def main(rknn_model: str, npy_path: str, ref_pt: str, target: str):
     if rk.init_runtime(target=target) != 0:
         raise RuntimeError("❌ Failed to initialise RKNN runtime")
 
-    # ── Load tensor & run inference ──
-    logmel_nhwc = load_logmel(npy_path)
-    print(f"[INFO] Loaded log-Mel tensor shape: {logmel_nhwc.shape}")
+    # ── Load FP-16 log-Mel tensor & run inference ──
+    logmel16 = load_logmel(npy_path)                 # float16 NHWC
+    print(f"[INFO] log-Mel tensor shape {logmel16.shape}, dtype {logmel16.dtype}")
 
     print("[3/4] Running inference …")
-    probe_emb = rk.inference(inputs=[logmel_nhwc])[0]
+    probe_emb16 = rk.inference(inputs=[logmel16])[0].astype(np.float16, copy=False)
     rk.release()
 
     # ── Load reference embedding ──
-    ref_emb = load_reference_embedding(ref_pt)
-    print(f"[INFO] Loaded reference embedding shape: {ref_emb.shape}")
+    ref_emb16 = load_ref_embedding(ref_pt)
+    print(f"[INFO] Reference embedding shape {ref_emb16.shape}, dtype {ref_emb16.dtype}")
 
     # ── Cosine similarity ──
-    sim = cosine_similarity(probe_emb, ref_emb)
+    sim = cosine_similarity(probe_emb16, ref_emb16)
     print(f"\n✅ Cosine Similarity : {sim:.4f}")
     print(f"🔎 Distance (1 - sim): {1 - sim:.4f}")
+
 
 # ──────────────────── CLI wrapper ────────────────────
 if __name__ == "__main__":
@@ -100,9 +110,9 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(1)
 
-    model_file = sys.argv[1]
-    logmel_npy = sys.argv[2]
-    ref_pt     = sys.argv[3]
+    model_file  = sys.argv[1]
+    logmel_npy  = sys.argv[2]
+    ref_pt      = sys.argv[3]
     target_chip = sys.argv[4] if len(sys.argv) > 4 else "rk3588"
 
     main(model_file, logmel_npy, ref_pt, target_chip)

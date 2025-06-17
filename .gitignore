@@ -4,3 +4,5 @@ pyvoice_venv
 *.wav
 *.onnx
 /redimnet/cal
+redimnet/test000_logmel.npy
+*.npy
