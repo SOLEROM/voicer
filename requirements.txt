@@ -73,9 +73,11 @@ humanfriendly==10.0
 idna @ file:///home/conda/feedstock_root/build_artifacts/idna_1701026962277/work
 ifaddr==0.2.0
 imagesize==1.4.1
+import-ipynb==0.2
 importlib-metadata @ file:///home/conda/feedstock_root/build_artifacts/importlib-metadata_1703269254275/work
 importnb==2023.11.1
 ipykernel==6.29.5
+ipynb==0.5.1
 ipython==8.26.0
 jedi==0.19.1
 Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/jinja2_1654302431367/work

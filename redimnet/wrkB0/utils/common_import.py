@@ -1,5 +1,6 @@
 from importnb import Notebook 
 from importnb import imports
+import import_ipynb
 
 import onnx
 import onnxruntime as ort
