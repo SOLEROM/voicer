@@ -6,3 +6,4 @@ pyvoice_venv
 /redimnet/cal
 redimnet/test000_logmel.npy
 *.npy
+redimnet/todo
