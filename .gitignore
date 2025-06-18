@@ -7,3 +7,5 @@ pyvoice_venv
 redimnet/test000_logmel.npy
 *.npy
 redimnet/todo
+# Ignore Python cache files
+__pycache__/

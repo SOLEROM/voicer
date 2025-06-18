@@ -4,10 +4,13 @@ import torch
 # train_type='ft_mix'
 # dataset='vb2+vox2+cnc'
 
-model_name='b2' # ~b2
+# model_name='b2' # ~b2
+# train_type='ptn'
+# dataset='vox2'
+
+model_name='B0'
 train_type='ptn'
 dataset='vox2'
-
 
 torch.hub.set_dir('/data/proj/voice/redimnet/models')
 

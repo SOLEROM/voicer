@@ -1,8 +1,6 @@
 # About
 
-* https://github.com/IDRnD/ReDimNet
-
-##
+* ref git : https://github.com/IDRnD/ReDimNet
 
 * spectrogram processing, particularly in extracting utterance-level speaker representations.
 	* Speaker representations refer to numerical features that uniquely describe a person's voice.
@@ -40,5 +38,7 @@ Downloading: "https://github.com/IDRnD/ReDimNet/releases/download/latest/M-vb2+v
 /data/proj/voice/redimnet/models/checkpoints/M-vb2+vox2+cnc-ft_mix.pt
 ```
 
+## workspaces
 
+* [modelB0 workspace](./wrkB0/readme.md)
 
