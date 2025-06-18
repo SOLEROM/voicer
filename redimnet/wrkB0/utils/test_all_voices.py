@@ -1,8 +1,9 @@
 import os
 from typing import Callable
+import torch
+import numpy as np
 
-
-def test_all_voices(extract_speaker_embedding_function:Callable, cosine_similarity_function:Callable ,save_embedding_to_pt_files:bool=False):
+def test_all_voices(extract_speaker_embedding_function:Callable, cosine_similarity_function:Callable ,save_embeddings:bool=False):
     """
     
     """
@@ -32,6 +33,25 @@ def test_all_voices(extract_speaker_embedding_function:Callable, cosine_similari
     print(f"Similarity (robot to human2  ): {cosine_similarity_function(embed1, embed5)}")
     print(f"Similarity (human1 to human2 ): {cosine_similarity_function(embed3, embed5)}")
     
+    if save_embeddings:
+        names = [
+            'embedding_test000',
+            'embedding_testRob1',
+            'embedding_testRob2',
+            'embedding_test_human1_1',
+            'embedding_test_human1_2',
+            'embedding_test_human2_1',
+            'embedding_test_human2_2',
+        ]
+        embeds = [embed0, embed1, embed2, embed3, embed4, embed5, embed6]
+
+        for name, emb in zip(names, embeds):
+            torch_path = os.path.join(audio_path, f"{name}.torch")
+            npy_path   = os.path.join(audio_path, f"{name}.npy")
+            torch.save(emb, torch_path)
+            np.save(npy_path, emb.cpu().numpy())
+        
+        
 
     response_embed_dic = {
         'embed0': embed0,

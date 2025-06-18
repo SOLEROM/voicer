@@ -32,3 +32,15 @@ python inference_rknn_2.py  ReDimNet_no_mel.rknn_3588 test00.wav me2.wav rk3588
 
 arecord -D hw:4,0 -f S16_LE -c2 -r16000 -d 5 rec_me.wav
 python live_compare_rknn.py   ReDimNet_no_mel.rknn_3588 rec_me.wav rk3588
+
+
+## convert
+
+* use embedding_testRob1.torch result embedding to test rkkn convert
+
+* run:
+```
+python convert.py \
+       ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 fp ReDimNet_no_mel.rknn \
+       ../wrkB0/audio/logmel_testRob1.npy  ../wrkB0/audio/embedding_testRob1.torch
+```

@@ -3,6 +3,7 @@ pyvoice_venv
 /redimnet/models
 *.wav
 *.onnx
+*.torch
 /redimnet/cal
 redimnet/test000_logmel.npy
 *.npy
