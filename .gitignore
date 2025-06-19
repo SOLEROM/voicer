@@ -10,3 +10,4 @@ redimnet/test000_logmel.npy
 redimnet/todo
 # Ignore Python cache files
 __pycache__/
+redimnet/3588/cal/dataset.txt

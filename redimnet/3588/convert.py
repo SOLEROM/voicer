@@ -41,7 +41,7 @@ import numpy as np
 from rknn.api import RKNN
 
 # ───────────────── defaults ─────────────────
-DATASET_TXT   = 'dataset.txt'
+DATASET_TXT   = './cal/dataset.txt'
 DEFAULT_OUT   = 'model.rknn'
 DEFAULT_DTYPE = 'fp'
 FRAMES        = 134
@@ -229,24 +229,26 @@ def main():
     if rknn.export_rknn(out_rknn) != 0:
         sys.exit('export failed')
 
-    # 6. host-CPU runtime
-    print('[6/7] init_runtime(target=None) – host CPU')
-    if rknn.init_runtime(target=None) != 0:
-        sys.exit('init_runtime failed (check Toolkit install)')
+    if not do_quant:
+        # 6. host-CPU runtime
+        print('[6/7] init_runtime(target=None) – host CPU')
+        if rknn.init_runtime(target=None) != 0:
+            sys.exit('init_runtime failed (check Toolkit install)')
 
-    # 7. inference + comparison
-    print('[7/7] inference() with',
-          logmel_npy if logmel_npy else 'random tensor')
-    inp = load_logmel(sample_path)
-    outs = rknn.inference(inputs=[inp], data_format='nchw')
-    print('Host-CPU inference OK → got', len(outs),
-          'output(s); first output shape:', outs[0].shape)
-
-    if logmel_npy and embed_path:
-        compare_outputs(outs[0].flatten(), embed_path , atol=0.1)
+        # 7. inference + comparison
+        print('[7/7] inference() with',
+            logmel_npy if logmel_npy else 'random tensor')
+        inp = load_logmel(sample_path)
+        outs = rknn.inference(inputs=[inp], data_format='nchw')
+        print('Host-CPU inference OK → got', len(outs),
+            'output(s); first output shape:', outs[0].shape)
+        if logmel_npy and embed_path:
+            compare_outputs(outs[0].flatten(), embed_path , atol=0.1)
 
     print('✔ RKNN saved at', out_rknn)
     rknn.release()
+    print('EOF!')
+
 
 
 if __name__ == '__main__':

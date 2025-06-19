@@ -49,7 +49,7 @@ def test_all_voices(extract_speaker_embedding_function:Callable, cosine_similari
             torch_path = os.path.join(audio_path, f"{name}.torch")
             npy_path   = os.path.join(audio_path, f"{name}.npy")
             torch.save(emb, torch_path)
-            np.save(npy_path, emb.cpu().numpy())
+            # np.save(npy_path, emb.cpu().numpy())
         
         
 

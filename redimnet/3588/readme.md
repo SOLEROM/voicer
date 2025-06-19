@@ -44,8 +44,17 @@ cd /home/rock/proj/voiceRKNN/voicer/redimnet/3588
 
 * run:
 ```
+python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 fp ReDimNet_no_mel.rknn
+
 python convert.py \
        ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 fp ReDimNet_no_mel.rknn \
+       ../wrkB0/audio/logmel_testRob1.npy  ../wrkB0/audio/embedding_testRob1.torch
+```
+
+```
+python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 i8 ReDimNet_no_mel.rknn
+
+python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 i8 ReDimNet_no_mel.rknn \
        ../wrkB0/audio/logmel_testRob1.npy  ../wrkB0/audio/embedding_testRob1.torch
 ```
 
