@@ -1,13 +1,13 @@
 # tests
 
-## inference_compareWithPt.py      
-* input: model.rknn  probe.wav  ref_embed.pt
-* run pre calc then compare cosine wiht ref pt
+## inference_Pre_wavVsEmb.py      
+* input: model.rknn  inputWAV.wav embed_X
+* run pre calc then compare cosine with ref embedding
 
-## inference_noPreUseNPY.py  
-* input:  model.rknn  clip_logmel.npy
+## inference_noPre_runLogmel.py  
+* input:  model.rknn  logmel_X
 * NO pre calc ; load logmel data file and run inference on that
 
-## inference_noPreCmpPt.py  
-* input: model.rknn  logmel.npy  ref_embed.pt
+## inference_noPre_logVsEmb.py  
+* input: model.rknn  logmel_X  embed_X
 * NO pre calc ; load logmel data file and compare cosine with ref pt

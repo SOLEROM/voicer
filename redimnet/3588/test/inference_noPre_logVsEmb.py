@@ -8,7 +8,7 @@ Compare a pre-computed log-Mel tensor (.npy) against a reference embedding
 Usage
 -----
 python compare_logmel_to_ref_fp16.py \
-       model.rknn  logmel.npy  ref_embed.pt  [rk3588]
+       model.rknn  logmel_X  embed_X  [rk3588]
 
 Notes
 -----

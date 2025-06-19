@@ -12,7 +12,7 @@ np.save("clip_logmel.npy", logmel_nchw.astype(np.float16))
 
 Usage
 -----
-python infer_logmel_rknn_fp16.py  model.rknn  clip_logmel.npy  [rk3588]
+python infer_logmel_rknn_fp16.py  model.rknn  logmel_X  [rk3588]
 
 The .npy file must be NCHW [B,1,60,134], float32 or float16.
 """

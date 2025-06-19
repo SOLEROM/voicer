@@ -8,7 +8,7 @@ torch.save) using a ReDimNet-NoMel RKNN model – **all data passed as FP-16**.
 Usage
 -----
 python compare_voice_to_ref_fp16.py \
-       model.rknn  probe.wav  ref_embed.pt  [rk3588]
+       model.rknn  probe.wav  embed_X  [rk3588]
 """
 
 # ───────────────────────── Imports ─────────────────────────
