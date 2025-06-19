@@ -64,8 +64,17 @@ python inference_rknn_2.py ReDimNet_no_mel.rknn ../wrkB0/audio/testRob1.wav  ../
 
 ## live run
 
-* to record for reference:
-    arecord -D hw:4,0 -f S16_LE -c2 -r16000 -d 5 rec_me.wav
+* on hw record for reference:
+    arecord -l //list devices
+    arecord -D hw:4,0 --dump-hw-params  // dump params
+    arecord -D hw:4,0 -f S16_LE -c2 -r16000 -d 10 localREC.wav
+
+* for long rec average each 2sec parts:
+    python prepareEmbFromRec.py  ReDimNet_no_mel.rknn localREC.wav refEmbed.tor
 
 * run live:
-    python live_compare_rknn.py   ReDimNet_no_mel.rknn_3588 rec_me.wav rk3588
+    python live_compare2Wav.py  ReDimNet_no_mel.rknn localREC.wav rk3588
+    python live_compare2Emb.py  ReDimNet_no_mel.rknn refEmbed.tor rk3588
+
+    
+
