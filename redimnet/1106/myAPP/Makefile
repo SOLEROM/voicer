@@ -4,6 +4,8 @@
 
 # ── tool-chain prefix (hard-float uClibc) ────────────────────────────────────
 CROSS_COMPILE := /home/user/shared/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-
+SYSROOT := 	/home/user/shared/luckfox-pico/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot
+
 
 CXX      := $(CROSS_COMPILE)g++
 STRIP    := $(CROSS_COMPILE)strip
@@ -15,10 +17,12 @@ RKNN_LIB := $(RKNN_SDK)/armhf-uclibc          # contains librknnmrt.so
 
 # ── compiler / linker flags ─────────────────────────────────────────────────
 ## kissfft must be before RKNN includes to override the default FFT implementation;
-CXXFLAGS := -O2 -Wall -std=c++17 -Idsp/kissfft -I$(RKNN_INC)
+CXXFLAGS := -O2 -Wall -std=c++17 --sysroot=$(SYSROOT) -Idsp/kissfft -I$(RKNN_INC)
 
-LDFLAGS_RUN  := -L$(RKNN_LIB) -lrknnmrt -lpthread -lm -ldl
-LDFLAGS_TEST :=                 -lpthread -lm -ldl          # no RKNN needed
+
+## libsndfile conf Buildroot image BR2_PACKAGE_LIBSNDFILE=y (Audio/Sound -*- libsndfile)
+LDFLAGS_RUN  := -L$(RKNN_LIB) -L$(SYSROOT)/usr/lib -lrknnmrt -lsndfile -lpthread -lm -ldl
+LDFLAGS_TEST := -L$(SYSROOT)/usr/lib  -lsndfile -lpthread -lm -ldl	 # no RKNN needed
 
 # ── libs ────────────────────────────────────────────────────────────────
 # KISS FFT library from mborgerding/kissfft/master
