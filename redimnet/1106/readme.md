@@ -63,8 +63,12 @@ librknnmrt version: 1.6.0 (9a7b5d24c@2023-12-13T17:33:10)
 on build-root docker:
 5118caecec7f4da43e1b74029c5cebce  /home/user/shared/luckfox-pico/output/out/oem/usr/lib/librknnmrt.so
 
+* sol: align runtime and compile versions
 
-
+```
+strings lib/librknnmrt.so  | grep version
+strings ReDimNet_no_mel.rknn | grep -m1 "version"
+```
 
 
 ## plan to use C RKNN Runtime
