@@ -1,6 +1,7 @@
 // test_dsp.cc  –  unit-tests for DSP stage 2A/2B
 #include "dsp/preemph.h"
 #include "dsp/stft.h"
+#include "dsp/melbank.h"
 
 #include <cstdio>
 #include <vector>
@@ -50,13 +51,32 @@ static bool test_stft()
     return ok;
 }
 
-//------------------------------------------------------------------
+static bool test_logmel()
+{
+    /* 320-sample 1 kHz sine so we hit the pad-branch */
+    constexpr float sr = 16'000.f;
+    constexpr float freq = 1'000.f;
+    std::vector<float> wav(320);
+    for (size_t n = 0; n < wav.size(); ++n)
+        wav[n] = std::sin(2*M_PI*freq*n/sr);
+
+    auto mel = dsp::wav_to_logmel(wav);
+    bool shape_ok = (mel.size() == 134) && (mel[0].size() == 60);
+    bool finite   = std::isfinite(mel[0][0]);
+
+    printf("[logmel] shape %zu×%zu, first=%.4f → %s\n",
+           mel.size(), mel[0].size(), mel[0][0],
+           (shape_ok && finite) ? "PASS" : "FAIL");
+    return shape_ok && finite;
+}
+
 int main()
 {
     bool ok1 = test_preemph();
     bool ok2 = test_stft();
+    bool ok3 = test_logmel();
 
-    std::printf("═══════════════════════════════════════════\n");
-    std::printf("DSP tests %s\n", (ok1 && ok2) ? "PASSED" : "FAILED");
-    return (ok1 && ok2) ? 0 : 1;
+    printf("═══════════════════════════════════════════\n");
+    printf("DSP tests %s\n", (ok1&&ok2&&ok3) ? "PASSED" : "FAILED");
+    return (ok1&&ok2&&ok3) ? 0 : 1;
 }
