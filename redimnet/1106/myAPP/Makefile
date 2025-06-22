@@ -26,7 +26,7 @@ KISS_SRC  := dsp/kissfft/kiss_fft.c dsp/kissfft/kiss_fftr.c
 
 
 # ── sources ────────────────────────────────────────────────────────────────
-SHARED_SRC := dsp/preemph.cc dsp/stft.cc dsp/melbank.cc $(KISS_SRC)
+SHARED_SRC := dsp/preemph.cc dsp/stft.cc dsp/melbank.cc dsp/quant.cc $(KISS_SRC)
 
 RUN_SRC    := main.cc $(SHARED_SRC)
 TEST_SRC   := test_dsp.cc $(SHARED_SRC)
