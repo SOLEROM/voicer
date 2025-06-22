@@ -47,6 +47,26 @@ rknn-toolkit-lite2
 * It needs the RKNPU-2 runtime (Toolkit-Lite 2), but the published Lite 2 wheels are 64-bit only.
 * The old Lite (v1.x) armv7l wheels do exist, but they drive RKNPU-1 only—they cannot talk to the RV1106 NPU firmware.
 
+
+
+## versions
+
+on target:
+5118caecec7f4da43e1b74029c5cebce  /oem/usr/lib/librknnmrt.so
+strings /oem/usr/lib/librknnmrt.so | grep "librknn"
+librknnmrt version: 1.6.0 (2de554906@2024-01-17T14:53:41)
+
+on build-rknn docker:
+strings /home/user/shared/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api/armhf-uclibc/librknnmrt.so | grep version
+librknnmrt version: 1.6.0 (9a7b5d24c@2023-12-13T17:33:10)
+
+on build-root docker:
+5118caecec7f4da43e1b74029c5cebce  /home/user/shared/luckfox-pico/output/out/oem/usr/lib/librknnmrt.so
+
+
+
+
+
 ## plan to use C RKNN Runtime
 
 ### driver support
@@ -91,3 +111,17 @@ unit-test (ctest) so CI keeps you safe.
 
 FFT	Replace KissFFT with CMSIS-DSP NEON routines
 Memory	Use rknn_create_mem + rknn_set_input_mem for zero-copy input buffers 
+
+
+## build RKNN module
+
+on rknn docker:
+    
+    conda activate RKNN-Toolkit2
+    cd ~/shared/voicer/redimnet/1106
+    cp -ar ../3588/cal .
+    python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rv1106 i8 ReDimNet_no_mel.rknn
+
+## run
+
+./run ReDimNet_no_mel.rknn  test000.wav
