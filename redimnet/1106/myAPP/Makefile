@@ -14,21 +14,15 @@ RKNN_INC := $(RKNN_SDK)/include
 RKNN_LIB := $(RKNN_SDK)/armhf-uclibc          # contains librknnmrt.so
 
 # ── compiler / linker flags ─────────────────────────────────────────────────
+## kissfft must be before RKNN includes to override the default FFT implementation;
 CXXFLAGS := -O2 -Wall -std=c++17 -Idsp/kissfft -I$(RKNN_INC)
 
 LDFLAGS_RUN  := -L$(RKNN_LIB) -lrknnmrt -lpthread -lm -ldl
 LDFLAGS_TEST :=                 -lpthread -lm -ldl          # no RKNN needed
 
-
-
-# ---- KissFFT (from Opus/CELT) ----
-# KISS_ROOT := /home/user/shared/luckfox-pico/sysdrv/source/mcu/rt-thread/third_party/audio/audio_server/extcodec/opencore-opus/celt
-# OPUS_INC  := /home/user/shared/luckfox-pico/sysdrv/source/mcu/rt-thread/third_party/audio/audio_server/extcodec/opencore-opus/include
-# KISS_SRC  := $(KISS_ROOT)/kiss_fft.c       
-# CXXFLAGS += -I$(KISS_ROOT) -I$(OPUS_INC)
-
+# ── libs ────────────────────────────────────────────────────────────────
+# KISS FFT library from mborgerding/kissfft/master
 KISS_SRC  := dsp/kissfft/kiss_fft.c dsp/kissfft/kiss_fftr.c
-# CXXFLAGS += -Idsp/kissfft ## delete as the RKNN headers wins the search order
 
 
 # ── sources ────────────────────────────────────────────────────────────────
