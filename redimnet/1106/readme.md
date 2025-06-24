@@ -129,3 +129,17 @@ on rknn docker:
 ## run
 
 ./run ReDimNet_no_mel.rknn  test000.wav
+
+
+# toolchian 2.3 / uclibc / buildroot
+
+on docker of buildroot/ubu + toolchain 2.3
+
+```
+strings ReDimNet_no_mel.rknn | grep version
+,"target_platform":["rv1106"],"version":"2.3.2",
+
+home/user/shared/rknn-toolkit2-v2.3.2-2025-04-09/rknpu2/runtime/Linux/librknn_api/armhf-uclibc/librknnmrt.so 
+librknnmrt version: 2.3.2 (429f97ae6b@2025-04-09T09:11:49)
+```
+

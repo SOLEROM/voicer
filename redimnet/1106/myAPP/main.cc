@@ -35,16 +35,20 @@ int main(int argc,char**argv)
 
     // 2) DSP  --------------------------------------------------------------
     auto mel = dsp::wav_to_logmel(wav);           // 134×60 float32
+    printf("Mel shape: %zu × %zu\n", mel.size(), mel[0].size());
 
     // 3) RKNN init ---------------------------------------------------------
+    printf("Loading RKNN model: %s\n",model_path);
     rknn_context ctx; if(rknn_init(&ctx,(void*)model_path,0,0,nullptr)){
         fprintf(stderr,"rknn_init failed\n"); return 1;}
+    printf("RKNN model loaded: %s\n",model_path);
 
     rknn_tensor_attr in_attr{}; in_attr.index=0;
     rknn_query(ctx,RKNN_QUERY_INPUT_ATTR,&in_attr,sizeof(in_attr));
+    printf("Input tensor: index=%d, type=%d, fmt=%d, size=%zu, scale=%.6f\n",
+          in_attr.index, in_attr.type, in_attr.fmt, in_attr.size, in_attr.scale);
 
     // 4) Quant -------------------------------------------------------------
-    std::vector<uint16_t> buf16;
     std::vector<int8_t>   buf8 ;
 
     rknn_input in{0};
@@ -52,32 +56,34 @@ int main(int argc,char**argv)
     in.fmt   = RKNN_TENSOR_NCHW;
     in.pass_through = 0;            // let runtime de-quant internally
 
-#if defined(RKNN_TENSOR_FLOAT16)
-    if (in_attr.type==RKNN_TENSOR_FLOAT16){
-        buf16=dsp::to_fp16(mel);
-        in.type = RKNN_TENSOR_FLOAT16;
-        in.buf  = buf16.data();
-        in.size = buf16.size()*sizeof(uint16_t);
-    } else
-#endif
-    {   /* INT8 / UINT8 branch                         */
-        float   scale = in_attr.scale ? in_attr.scale : 0.02f;
-        int32_t zp    = 0;     
-        buf8 = dsp::to_int8<int8_t>(mel,scale,zp);
-        in.type = in_attr.type;             // INT8 or UINT8
-        in.buf  = buf8.data();
-        in.size = buf8.size();
-    }
+
+    /* INT8 / UINT8 branch                         */
+    float   scale = in_attr.scale ? in_attr.scale : 0.02f;
+    int32_t zp    = 0;     
+    buf8 = dsp::to_int8<int8_t>(mel,scale,zp);
+    in.type = in_attr.type;             // INT8 or UINT8
+    in.buf  = buf8.data();
+    in.size = buf8.size();
+
+    printf("Input quantized: size=%zu, scale=%.6f, zp=%d\n",
+          in.size, scale, zp);
     rknn_inputs_set(ctx,1,&in);
 
     // 5) run ---------------------------------------------------------------
+    printf("Running RKNN model...\n");
     rknn_run(ctx,nullptr);
+    printf("run ended\n");
 
     rknn_output out{0}; out.want_float=1;
     rknn_outputs_get(ctx,1,&out,nullptr);
+    printf("Output tensor: out_size=%zu \n", out.size);
+
     float* e = static_cast<float*>(out.buf);
     printf("Embedding[0..3] = %.3f  %.3f  %.3f  %.3f\n",e[0],e[1],e[2],e[3]);
+    
+    printf("cleaning up...\n");
     rknn_outputs_release(ctx,1,&out);
     rknn_destroy(ctx);
+    
     return 0;
 }

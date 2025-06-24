@@ -11,10 +11,10 @@ CXX   := $(CROSS_COMPILE)g++
 STRIP := $(CROSS_COMPILE)strip
 
 # ── RKNN runtime (the one that matches your model) ---------------------------
-# contains librknnmrt.so 2.3.2
-RKNN_LIBDIR := /home/user/shared/rknn-toolkit2-v2.3.2-2025-04-09/rknpu2/runtime/Linux/librknn_api/armhf-uclibc
-# contains rknn_api.h
-RKNN_INC    := /home/user/shared/rknn-toolkit2-v2.3.2-2025-04-09/rknpu2/runtime/Linux/librknn_api/include
+# contains librknnmrt.so
+RKNN_LIBDIR := /home/user/shared/rknn_model_zoo/install/rv1106_linux_armv7l/rknn_yolov5_demo/lib
+# contains librknn_api.h
+RKNN_INC    := /home/user/shared/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api/include
 
 # ── compiler / linker flags --------------------------------------------------
 #       KissFFT path first (overrides stub in RKNN headers)
