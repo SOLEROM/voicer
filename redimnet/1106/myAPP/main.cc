@@ -1,7 +1,13 @@
-// main.cc  –  WAV → DSP → quant → RKNN   (verbose edition)
+// ────────────────────────────────────────────────────────────────────────────
+//  main.cc ─ WAV → DSP → RKNN inference (FP32 input, no transpose)
+//
+//  • Sends the FP32 log-Mel tensor exactly as H=134, W=1, C=60 (NHWC).
+//  • in.size is 134 × 60 × 4 = 32 160 B, matching nElems * sizeof(float).
+//  • RKNN does the quantisation internally; no -5 error.
+//
+// ────────────────────────────────────────────────────────────────────────────
 #include <rknn_api.h>
 #include "dsp/melbank.h"
-#include "dsp/quant.h"
 #include <sndfile.h>
 
 #include <cstdio>
@@ -9,187 +15,125 @@
 #include <vector>
 #include <cassert>
 #include <cstring>
+#include <algorithm>
 
-// ──────────── pretty console helpers ────────────
-#define BAR   "============================================================\n"
-#define SECTION(txt) do { puts("\n" BAR txt "\n" BAR); } while (0)
-#define CHECK(x, msg) do { if(!(x)){fprintf(stderr,"ERROR: %s\n",msg); exit(1);} } while(0)
+#define BAR "============================================================\n"
+#define SECTION(t) do { puts("\n" BAR t "\n" BAR); } while (0)
+#define CHECK(x,msg) do { if(!(x)){ fprintf(stderr,"ERROR: %s\n",msg); exit(1);} } while (0)
 
-// ──────────── turn on RKNN internal logs ─────────
-static void enable_rknn_debug(int level = 3)        // 0-5 (5 = trace)
+static void enable_rknn_debug(int lvl = 3)
 {
-    char buf[2] = { char('0' + level), '\0' };
+    char buf[2] = { char('0' + lvl), 0 };
     setenv("RKNN_LOG_LEVEL", buf, 1);
-
-    /* ► extra dump switches – enable if your Toolkit build supports them
-       setenv("RKNN_DUMP_TENSOR", "1", 1);
-       setenv("RKNN_DUMP_LAYER",  "1", 1);
-    */
 }
 
-// ──────────── WAV loader (16-kHz mono) ───────────
-static bool load_wav(const char* path, std::vector<float>& out)
+static bool load_wav(const char* p, std::vector<float>& out)
 {
-    SF_INFO info{};
-    SNDFILE* sf = sf_open(path, SFM_READ, &info);
-    if (!sf) { perror("sf_open"); return false; }
-
-    if (info.channels != 1 || info.samplerate != 16000) {
-        fprintf(stderr, "Need mono 16-k WAV (got %d ch @ %d Hz)\n",
-                info.channels, info.samplerate);
-        sf_close(sf);
-        return false;
+    SF_INFO i{}; SNDFILE* f = sf_open(p, SFM_READ, &i);
+    if (!f) { perror("sf_open"); return false; }
+    if (i.channels != 1 || i.samplerate != 16000) {
+        fprintf(stderr,"Need mono 16-kHz WAV (got %d ch @ %d Hz)\n",
+                i.channels,i.samplerate);
+        sf_close(f); return false;
     }
-    out.resize(static_cast<size_t>(info.frames));
-    sf_readf_float(sf, out.data(), info.frames);
-    sf_close(sf);
+    out.resize(static_cast<size_t>(i.frames));
+    sf_readf_float(f, out.data(), i.frames);
+    sf_close(f);
     return true;
 }
 
-// ──────────── print tensor attributes nicely ─────
 static void dump_attr(const rknn_tensor_attr& a)
 {
-    printf("index=%u  name=%s  fmt=%d  type=%d  qnt=%d  dims=[%d,%d,%d,%d]\n"
-           "size=%u  scale=%g  zp=%d\n",
-           a.index, a.name, a.fmt, a.type, a.qnt_type,
-           a.dims[0], a.dims[1], a.dims[2], a.dims[3],
-           a.size,   a.scale,   a.zp);
+    printf("index=%u  fmt=%d  type=%d  size(B)=%u  scale=%g  zp=%d  "
+           "dims=[%d,%d,%d,%d]\n",
+           a.index,a.fmt,a.type,a.size,a.scale,a.zp,
+           a.dims[0],a.dims[1],a.dims[2],a.dims[3]);
 }
 
-// ──────────── main ───────────────────────────────
-int main(int argc, char** argv)
+static void diag_param_invalid(const rknn_context& ctx,
+                               const rknn_input&  in,
+                               size_t host_sz)
 {
-    if (argc < 3) {
-        fprintf(stderr, "usage: %s  model.rknn  audio.wav\n", argv[0]);
-        return 1;
-    }
+    rknn_tensor_attr need{}; need.index = 0;
+    rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &need, sizeof(need));
+
+    puts("\n*** RKNN_ERR_PARAM_INVALID (-5) – details ********************");
+    dump_attr(need);
+    printf("We supplied : type=%d  fmt=%d  size=%u  pass_through=%d\n",
+           in.type,in.fmt,in.size,in.pass_through);
+    printf("Element check: host=%zu  model=%u  (%s)\n",
+           host_sz,need.size,(host_sz==need.size?"OK":"MISMATCH!"));
+    puts("**************************************************************\n");
+}
+
+static void print_versions(rknn_context ctx)
+{
+    rknn_sdk_version v{};
+    if (!rknn_query(ctx, RKNN_QUERY_SDK_VERSION, &v, sizeof(v)))
+        printf("SDK  : %s   Driver : %s\n", v.api_version, v.drv_version);
+}
+
+int main(int argc,char** argv)
+{
+    if (argc<3){ fprintf(stderr,"usage: %s model.rknn audio.wav\n",argv[0]); return 1; }
     const char* model_path = argv[1];
     const char* wav_path   = argv[2];
 
-    enable_rknn_debug(5);               // same as Python’s “LOG_LEVEL = 3”
+    enable_rknn_debug(3);
 
     SECTION("1/6  WAV → RAM");
     std::vector<float> wav;
-    CHECK(load_wav(wav_path, wav), "loading WAV failed");
-    printf("Loaded %zu samples from %s\n", wav.size(), wav_path);
+    CHECK(load_wav(wav_path,wav),"load_wav");
+    printf("Loaded %zu samples\n", wav.size());
 
-    SECTION("2/6  DSP  (log-Mel)");
-    auto mel = dsp::wav_to_logmel(wav);                    // [T, 60] f32
-    printf("Mel shape : %zu × %zu  (time × n_mels)\n",
-           mel.size(), mel.empty() ? 0 : mel[0].size());
+    SECTION("2/6  DSP (log-Mel)");
+    auto mel = dsp::wav_to_logmel(wav);           // [time][mel_bins]
+    const size_t T = mel.size();                  // 134
+    const size_t M = mel[0].size();               // 60
+    printf("Mel shape : %zu × %zu (time × mel)\n",T,M);
 
-    SECTION("3/6  RKNN  init");
-    rknn_context ctx = 0;
-    CHECK(rknn_init(&ctx, (void*)model_path, 0, 0, nullptr) == 0,
-          "rknn_init failed");
-    puts("Model loaded.");
+    SECTION("3/6  RKNN init");
+    rknn_context ctx=0;
+    CHECK(!rknn_init(&ctx,(void*)model_path,0,0,nullptr),"rknn_init");
+    print_versions(ctx);
 
-    // query some meta info
-    rknn_sdk_version ver{};
-    rknn_query(ctx, RKNN_QUERY_SDK_VERSION, &ver, sizeof(ver));
-    printf("SDK %.*s  Driver %.*s\n",
-           int(sizeof(ver.api_version)), ver.api_version,
-           int(sizeof(ver.drv_version)), ver.drv_version);
+    rknn_tensor_attr in_attr{}; in_attr.index = 0;
+    rknn_query(ctx,RKNN_QUERY_INPUT_ATTR,&in_attr,sizeof(in_attr));
+    dump_attr(in_attr);                           // fmt = 1 (NHWC)
 
-    uint32_t io_num[2];
-    rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, io_num, sizeof(io_num));
-    printf("IO : %u input(s), %u output(s)\n", io_num[0], io_num[1]);
-
-    rknn_tensor_attr in_attr{};
-    in_attr.index = 0;
-    rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &in_attr, sizeof(in_attr));
-    dump_attr(in_attr);
-
-    SECTION("4/6  Quantise input");
-    float   scale = in_attr.scale ? in_attr.scale : 0.02f;
-    int32_t zp    = in_attr.zp;
-    std::vector<int8_t> buf8 = dsp::to_int8<int8_t>(mel, scale, zp);
-
-    printf("Host buf8.size = %zu  in_attr.size = %u  (%s)\n",
-        buf8.size(), in_attr.size,
-        buf8.size() == in_attr.size ? "OK" : "MISMATCH!");
+    SECTION("4/6  Prepare FP32 NHWC buffer");
+    std::vector<float> buf_nhwc(T*M);             // H(134)×C(60)
+    for(size_t h=0; h<T; ++h)                     // H = time dimension
+        std::memcpy(&buf_nhwc[h*M], mel[h].data(), M*sizeof(float));
 
     rknn_input in{};
     in.index        = 0;
-    in.type         = in_attr.type;      // 2  →  INT8
-    in.fmt          = in_attr.fmt;       // 1  →  NHWC
-    in.size         = static_cast<uint32_t>(buf8.size());   // 8040 bytes
-    in.buf          = buf8.data();
-    in.pass_through = 1;                 // ★ we pass INT8 exactly as-is
+    in.buf          = buf_nhwc.data();
+    in.size         = static_cast<uint32_t>(buf_nhwc.size()*sizeof(float)); // 32 160
+    in.type         = RKNN_TENSOR_FLOAT32;        // runtime will quantise
+    in.fmt          = RKNN_TENSOR_NHWC;
+    in.pass_through = 0;
 
-    printf("Sending input : index=%u  type=%d  fmt=%d  size=%u  buf=%p\n",
-        in.index, in.type, in.fmt, in.size, in.buf);
-
-    int ret = rknn_inputs_set(ctx, 1, &in);
-    if (ret != 0) {
-        fprintf(stderr, "rknn_inputs_set FAILED  ret=%d  → ", ret);
-        switch (ret) {                          // numeric map from rknn_api.h
-            case -1:  fputs("generic failure\n",          stderr); break;
-            case -2:  fputs("timeout\n",                  stderr); break;
-            case -3:  fputs("device/context unavailable\n", stderr); break;
-            case -4:  fputs("host memory allocation failed\n", stderr); break;
-            case -5:  fputs("invalid parameter (dtype / fmt / size)\n", stderr); break;
-            case -6:  fputs("invalid or corrupted model\n", stderr); break;
-            case -7:  fputs("invalid context handle\n",    stderr); break;
-            case -8:  fputs("input mismatch (shape / layout / type)\n", stderr); break;
-            case -9:  fputs("output mismatch (rare here)\n", stderr); break;
-            default:  fputs("unrecognized RKNN error\n",   stderr); break;
-        }
-
-        if (ret == -5 ) {
-            fprintf(stderr, "rknn_inputs_set FAILED with  ret=%d  (-5 = bad parameter)\n", ret);
-
-            // 1️⃣  show what the model really wants
-            rknn_tensor_attr need{};
-            need.index = 0;
-            rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &need, sizeof(need));
-            printf("\nModel expects :\n"
-                "  type=%d  fmt=%d  size=%u  qnt_type=%d  scale=%g  zp=%d\n"
-                "  dims (n=%d) : [%d %d %d %d]\n",
-                need.type, need.fmt, need.size, need.qnt_type,
-                need.scale, need.zp,
-                need.n_dims,
-                need.dims[0], need.dims[1], need.dims[2], need.dims[3]);
-
-            // 2️⃣  show what we sent
-            printf("\nWe supplied  :\n"
-                "  type=%d  fmt=%d  size=%u  pass_through=%d  buf=%p\n",
-                in.type,  in.fmt,  in.size, in.pass_through, in.buf);
-
-            // 3️⃣  compare element count
-            size_t expect_elems = need.size;               // bytes (quant) or floats
-            printf("\nElement check: host=%zu  model=%zu  (%s)\n",
-                static_cast<size_t>(in.size), expect_elems,
-                in.size == expect_elems ? "OK" : "MISMATCH!");
-
-            // 4️⃣  check data range (helps spot INT8 vs UINT8 misuse)
-            if (in.buf && in.size) {
-                const int8_t* p = static_cast<const int8_t*>(in.buf);
-                auto mm = std::minmax_element(p, p + in.size);
-                printf("Input range  : [%d … %d]\n\n", int(*mm.first), int(*mm.second));
-            }
-        }
-
-        return 1;
+    int ret = rknn_inputs_set(ctx,1,&in);
+    if (ret){
+        fprintf(stderr,"rknn_inputs_set FAILED  ret=%d\n",ret);
+        if (ret==-5) diag_param_invalid(ctx,in,in.size);
+        rknn_destroy(ctx); return 1;
     }
-    printf("rknn_inputs_set OK");
 
     SECTION("5/6  Inference");
-    CHECK(rknn_run(ctx, nullptr) == 0, "rknn_run failed");
-    printf("Inference OK.");
+    CHECK(!rknn_run(ctx,nullptr),"rknn_run");
+    puts("Inference OK");
 
     SECTION("6/6  Fetch output");
-    rknn_output out{};
-    out.want_float = 1;                       // de-quant to FP32
-    CHECK(rknn_outputs_get(ctx, 1, &out, nullptr) == 0,
-          "outputs_get failed");
+    rknn_output out{}; out.want_float = 1;
+    CHECK(!rknn_outputs_get(ctx,1,&out,nullptr),"outputs_get");
 
     const float* e = static_cast<const float*>(out.buf);
-    printf("Embedding[0..3] = %.3f %.3f %.3f %.3f\n",
-           e[0], e[1], e[2], e[3]);
+    printf("Embedding[0..3] = %.3f  %.3f  %.3f  %.3f\n",
+           e[0],e[1],e[2],e[3]);
 
-    // tidy up
-    rknn_outputs_release(ctx, 1, &out);
+    rknn_outputs_release(ctx,1,&out);
     rknn_destroy(ctx);
     return 0;
 }
