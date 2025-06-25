@@ -41,7 +41,7 @@ import numpy as np
 from rknn.api import RKNN
 
 # ───────────────── defaults ─────────────────
-DATASET_TXT   = './cal/dataset.txt'
+DATASET_TXT   = './cal/dataset2.txt'
 DEFAULT_OUT   = 'model.rknn'
 DEFAULT_DTYPE = 'fp'
 FRAMES        = 134
@@ -79,7 +79,7 @@ def parse_cli():
 
 # ───── helper: tmp random sample ─────
 def random_sample_path() -> str:
-    arr = np.random.randn(1, 1, 60, FRAMES).astype(np.float32)
+    arr = np.random.randn(1, 60, FRAMES,1 ).astype(np.float32)
     f   = tempfile.NamedTemporaryFile(suffix='.npy', delete=False,
                                       prefix='_tmp_sample_', dir='.')
     np.save(f.name, arr); f.close()
@@ -101,8 +101,8 @@ def load_logmel(path: str) -> np.ndarray:
             raise ValueError(f'Cannot interpret log-Mel shape {x.shape}')
         x = x.transpose(0, 3, 1, 2)
 
-    if x.shape[2] != 60 or x.shape[3] != FRAMES:
-        raise ValueError(f'Expected [1,1,60,{FRAMES}], got {x.shape}')
+    if x.shape[1] != 60 or x.shape[2] != FRAMES:
+        raise ValueError(f'Expected [1,60,{FRAMES},1], got {x.shape}')
     return x
 
 
@@ -191,14 +191,14 @@ def main():
 
     # 1. config
     print('[1/7] config()')
-    rknn.config(mean_values=[[0]], std_values=[[1]],
+    rknn.config(mean_values=[[0] * 60], std_values=[[1] * 60],
                 target_platform=platform, optimization_level=0)
 
     # 2. load ONNX
     print('[2/7] load_onnx() →', onnx_path)
     if rknn.load_onnx(onnx_path,
                       inputs=['log_mel'],
-                      input_size_list=[[1, 1, 60, FRAMES]]) != 0:
+                      input_size_list=[[1,60, FRAMES,1]]) != 0:
         sys.exit('load_onnx failed')
 
     # 3. build
@@ -242,7 +242,7 @@ def main():
         print('[7/7] inference() with',
             logmel_npy if logmel_npy else 'random tensor')
         inp = load_logmel(sample_path)
-        outs = rknn.inference(inputs=[inp], data_format='nchw')
+        outs = rknn.inference(inputs=[inp], data_format='nhwc')
         print('Host-CPU inference OK → got', len(outs),
             'output(s); first output shape:', outs[0].shape)
         if logmel_npy and embed_path:
