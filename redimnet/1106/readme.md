@@ -143,3 +143,6 @@ home/user/shared/rknn-toolkit2-v2.3.2-2025-04-09/rknpu2/runtime/Linux/librknn_ap
 librknnmrt version: 2.3.2 (429f97ae6b@2025-04-09T09:11:49)
 ```
 
+## debug level
+
+* use env var: export RKNN_LOG_LEVEL=1

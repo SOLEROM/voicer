@@ -190,6 +190,13 @@ def main():
     rknn = RKNN(verbose=True)
 
     # 1. config
+    # Valid input is ['mean_values', 'std_values', 'quantized_dtype', 'quantized_algorithm', 
+    # 'quantized_method', 'quantized_hybrid_level', 'target_platform', 'quant_img_RGB2BGR', 
+    # 'float_dtype', 'optimization_level', 'custom_string', 'remove_weight', 'compress_weight', 
+    # 'inputs_yuv_fmt', 'single_core_mode', 'dynamic_input', 'model_pruning', 'op_target',
+    # 'quantize_weight', 'remove_reshape', 'sparse_infer', 'enable_flash_attention', 
+    # 'auto_hybrid_cos_thresh', 'auto_hybrid_euc_thresh', 'output_optimize', 'set_op_attr', 
+    # 'sram_prefer', 'nbuf_prefer', 'check_data', 'stream_op', 'disable_rules', 'enable_rnn_loop'].
     print('[1/7] config()')
     rknn.config(mean_values=[[0]], std_values=[[1]],
                 target_platform=platform, optimization_level=0)
