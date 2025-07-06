@@ -20,13 +20,40 @@ from rknn.api     import RKNN
 
 # os.environ['RKNN_LOG_LEVEL'] = '3'        # warnings and up only
 
+# ─────────────────── MIC SRC    ───────────────────
+def set_input_device(preferred_name="ReSpeaker", fallback_id=0):
+    try:
+        print(f"🔍 Searching for input device containing: '{preferred_name}'")
+        devices = sd.query_devices()
+        input_devices = [(i, d) for i, d in enumerate(devices) if d['max_input_channels'] > 0]
+
+        for idx, device in input_devices:
+            if preferred_name.lower() in device['name'].lower():
+                sd.default.device = (idx, None)
+                print(f"✅ Using input device #{idx}: {device['name']}")
+                return
+
+        # If not found
+        print(f"⚠️ '{preferred_name}' not found. Falling back to device #{fallback_id}: {devices[fallback_id]['name']}")
+        sd.default.device = (fallback_id, None)
+
+    except Exception as e:
+        print(f"❌ Error setting input device. Falling back to #{fallback_id}. Error: {e}")
+        sd.default.device = (fallback_id, None)
+
+    print("🎙️ Final input device:", sd.query_devices(sd.default.device[0])['name'])
+
+# Example usage:
+set_input_device("ReSpeaker", fallback_id=4)
+print(sd.query_devices())
+
 # ─────────────────── Front-end constants (IDRnD) ───────────────────
 _PREEMPH  = 0.97
 _SR       = 16_000
 _N_FFT    = 512
 _WIN_LEN  = 400
 _HOP      = 240
-_N_MELS   = 60
+_N_MELS   = 72
 _F_MIN    = 20.0
 _F_MAX    = 7_600.0
 _TARGET_T = 134                           # frames used by ReDimNet-NoMel
@@ -174,6 +201,8 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
+
+
 
     rknn_model   = sys.argv[1]
     reference_wav= sys.argv[2]

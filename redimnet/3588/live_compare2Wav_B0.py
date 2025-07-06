@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """
 live_compare_rknn.py – Real-time microphone verification with a ReDimNet-NoMel
-RKNN model.
-
-The reference can be **either**:
-  • an audio file (wav/flac/…) – its embedding is computed at start time, or
-  • a Torch-saved embedding tensor (.pt/.torch) or a .npy file.
+RKNN model, using the same NumPy/SciPy front-end as `inference_rknn.py`.
 
 Usage
 -----
-python live_compare_rknn.py  model.rknn  reference.{wav|pt|npy}  [rk3588]  [chunk_secs]
+python live_compare_rknn.py  model.rknn  reference.wav  [rk3588]  [chunk_secs]
 """
 
 # ───────────────────────── Imports ─────────────────────────
@@ -22,13 +18,7 @@ from scipy.signal import get_window, resample
 from numpy.fft    import rfft
 from rknn.api     import RKNN
 
-try:
-    import torch           # optional, only for torch.load()
-except ImportError:
-    torch = None
-
 # os.environ['RKNN_LOG_LEVEL'] = '3'        # warnings and up only
-
 
 # ─────────────────── MIC SRC    ───────────────────
 def set_input_device(preferred_name="ReSpeaker", fallback_id=0):
@@ -66,7 +56,7 @@ _HOP      = 240
 _N_MELS   = 60
 _F_MIN    = 20.0
 _F_MAX    = 7_600.0
-_TARGET_T = 134                            # frames used by ReDimNet-NoMel
+_TARGET_T = 134                           # frames used by ReDimNet-NoMel
 _EPS      = 1e-6
 
 # ─────────────────── DSP helpers ───────────────────
@@ -136,7 +126,7 @@ def waveform_to_logmel(wave: np.ndarray,
     spec = np.stack(frames, axis=1, dtype=np.float16)   # [freq, T]
 
     # 4) Mel projection
-    mel = _MEL_FB @ spec                                # [60, T]
+    mel = _MEL_FB @ spec                               # [60, T]
 
     # 5) natural log + per-bin mean normalisation
     logmel = np.log(mel + _EPS, dtype=np.float16)
@@ -167,48 +157,13 @@ def extract_embedding(rknn: RKNN, wave: np.ndarray, sr: int) -> np.ndarray:
         duration = len(wave) / sr
         wave = resample(wave, int(duration * _SR))
     logmel = waveform_to_logmel(wave)                  # [1,1,60,200]
-    return rknn.inference(inputs=[logmel], data_format='nchw')[0].astype(np.float16)
-
-
-def load_reference_embedding(path: str) -> np.ndarray:
-    """
-    Load a Torch-saved embedding (.pt/.torch) **or** a .npy file and
-    return float16 NumPy array.
-    """
-    ext = os.path.splitext(path)[1].lower()
-    if ext == '.npy':
-        ref = np.load(path).astype(np.float16)
-    else:
-        print("⚠️ Loading reference embedding from Torch file:", path)
-        if torch is None:
-            sys.exit('ERROR: torch is required to load Torch tensors.')
-        ref = torch.load(path, map_location='cpu')
-        if isinstance(ref, torch.Tensor):
-            ref = ref.cpu().to(torch.float16).numpy()
-        else:
-            ref = np.asarray(ref, dtype=np.float16)
-        print("...loaded ref shape:", ref.shape)
-    return ref
-
-
-def prepare_reference(rknn: RKNN, ref_path: str) -> np.ndarray:
-    """
-    Determine whether `ref_path` is audio or embedding and return the embedding.
-    """
-    audio_exts = {'.wav', '.flac', '.ogg', '.mp3', '.m4a', '.aac'}
-    if os.path.splitext(ref_path)[1].lower() in audio_exts:
-        wave, sr = sf.read(ref_path, always_2d=False)
-        if wave.ndim > 1:
-            wave = wave.mean(axis=1)
-        return extract_embedding(rknn, wave, sr)
-    else:
-        return load_reference_embedding(ref_path)
+    return rknn.inference(inputs=[logmel], data_format='nchw')[0]
 
 # ─────────────────── Main loop ───────────────────
 def listen_and_compare(rknn_path: str,
-                       ref_path:   str,
-                       target:     str  = 'rk3588',
-                       chunk_s:    int  = 1):
+                       ref_wav:  str,
+                       target:   str  = 'rk3588',
+                       chunk_s:  int  = 1):
     print(f'🧠 Loading RKNN model: {rknn_path}')
     rk = RKNN()
     if rk.load_rknn(rknn_path) != 0:
@@ -216,8 +171,11 @@ def listen_and_compare(rknn_path: str,
     if rk.init_runtime(target=target) != 0:
         sys.exit('init_runtime failed')
 
-    print(f'start Preparing reference from: {ref_path}')
-    ref_emb = prepare_reference(rk, ref_path)
+    print(f'🎧 Loading reference clip: {ref_wav}')
+    ref_wave, ref_sr = sf.read(ref_wav, always_2d=False)
+    if ref_wave.ndim > 1:
+        ref_wave = ref_wave.mean(axis=1)
+    ref_emb = extract_embedding(rk, ref_wave, ref_sr)
 
     sd.default.samplerate = _SR        # record natively at 16 kHz
     sd.default.channels   = 1
@@ -244,9 +202,11 @@ if __name__ == '__main__':
         print(__doc__)
         sys.exit(1)
 
-    rknn_model = sys.argv[1]
-    reference  = sys.argv[2]
-    target_hw  = sys.argv[3] if len(sys.argv) > 3 else 'rk3588'
-    chunk_secs = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 
-    listen_and_compare(rknn_model, reference, target_hw, chunk_secs)
+
+    rknn_model   = sys.argv[1]
+    reference_wav= sys.argv[2]
+    target_hw    = sys.argv[3] if len(sys.argv) > 3 else 'rk3588'
+    chunk_secs   = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+
+    listen_and_compare(rknn_model, reference_wav, target_hw, chunk_secs)
