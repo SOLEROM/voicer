@@ -20,20 +20,17 @@ set our rknn to NCHW:
 rknn.inference(inputs=[inp], data_format='nchw') ##!!!
 ```
 
-## 3588
+## target
 
 * log additions on the target
 ```
-pip install rknn-toolkit2 numpy soundfile 
-pip install rknn-toolkit2 soundfile numpy scipy sounddevice
-sudo apt install libportaudio2 portaudio19-dev
-pip install --force-reinstall sounddevice
+TBD
 ```
 
 * run env on target:
 ```
-source  /home/rock/proj/voiceRKNN/venvRKNN/bin/activate
-cd /home/rock/proj/voiceRKNN/voicer/redimnet/3588
+source  /local/voicer/venvRKNN/bin/activate
+cd /local/voicer/3566
 ```
 
 
@@ -43,19 +40,29 @@ cd /home/rock/proj/voiceRKNN/voicer/redimnet/3588
 * use embedding_testRob1.torch result embedding to test rkkn convert
 
 * run:
-```
-python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 fp ReDimNet_no_mel.rknn
 
-python convert.py \
-       ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 fp ReDimNet_no_mel.rknn \
-       ../wrkB0/audio/logmel_testRob1.npy  ../wrkB0/audio/embedding_testRob1.torch
-```
+fp for B2
 
 ```
-python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 i8 ReDimNet_no_mel.rknn
+python convert.py  ../wrkB2/ReDimNet_no_mel_fp16.onnx rk3566 fp B2 ReDimNet_no_mel.rknn 
 
-python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 i8 ReDimNet_no_mel.rknn \
-       ../wrkB0/audio/logmel_testRob1.npy  ../wrkB0/audio/embedding_testRob1.torch
+
+python convert.py  ../wrkB2/ReDimNet_no_mel_fp16.onnx rk3566 fp B2 ReDimNet_no_mel.rknn ../wrkB2/audio/logmel_testRob1.npy  ../wrkB2/audio/embedding_testRob1.torch 
+
+🔎  Δmax=0.006991  Δmean=0.002093  cosine=0.999999
+✅ RKNN output matches reference within tolerance.
+✔ RKNN saved at ReDimNet_no_mel.rknn
+EOF!
+
+
+```
+
+i8 
+
+```
+
+TBD
+
 ```
 
 ## unit test
@@ -66,8 +73,11 @@ python convert.py ../wrkB0/ReDimNet_no_mel_fp16.onnx rk3588 i8 ReDimNet_no_mel.r
 ## inference test
 
 ```
+python inference_rknn.py ReDimNet_no_mel.rknn testRob1.wav --target rk3566
+
+
 python inference_rknn.py ReDimNet_no_mel.rknn ../wrkB0/audio/testRob1.wav
-python inference_rknn_2.py ReDimNet_no_mel.rknn ../wrkB0/audio/testRob1.wav  ../wrkB0/audio/testRob2.wav
+python inference_rknn.py ReDimNet_no_mel.rknn ../wrkB0/audio/testRob1.wav  ../wrkB0/audio/testRob2.wav
 ```
 
 
@@ -80,10 +90,10 @@ python inference_rknn_2.py ReDimNet_no_mel.rknn ../wrkB0/audio/testRob1.wav  ../
 
 * for long rec average each 2sec parts:
     python prepareEmbFromRec.py  ReDimNet_no_mel.rknn localREC.wav refEmbed.tor
+    python live_compare2Emb.py  ReDimNet_no_mel.rknn refEmbed.tor rk3566 2 modelB2
 
 * run live:
-    python live_compare2Wav_B2.py  ReDimNet_no_mel.rknn localREC.wav rk3566
-    python live_compare2Emb_B2.py  ReDimNet_no_mel.rknn refEmbed.tor rk3566
+    python live_compare2Wav.py  ReDimNet_no_mel.rknn localREC.wav rk3566 2 modelB2
 
     
 

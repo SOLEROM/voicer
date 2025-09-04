@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
 """
-inference_rknn.py – Rockchip RKNN inference for ReDimNetNoMel checkpoints
-(NumPy/SciPy implementation of the original PyTorch front-end)
+rknn_embed_or_verify.py — ReDimNet-NoMel RKNN front-end + inference
 
 Usage
 -----
-python inference_rknn.py  model.rknn  audio.wav
+# 1) Single-file inference (prints embedding stats; optionally save)
+python rknn_embed_or_verify.py  model.rknn  audio.wav  [--target rk3588] [--out emb.npy]
+
+# 2) Two-file verification (prints cosine similarity)
+python rknn_embed_or_verify.py  model.rknn  audio1.wav  audio2.wav  [--target rk3588]
 """
 
-# ----------------------------------------------------------------------
-#  Imports (no PyTorch, no torchaudio)
-# ----------------------------------------------------------------------
 import os
 import sys
+import argparse
 import numpy as np
 import soundfile as sf
 from scipy.signal import get_window, resample
-from numpy.fft    import rfft
-from rknn.api     import RKNN
+from numpy.fft import rfft
+from rknn.api import RKNN
 
-# ----------------------------------------------------------------------
-#  RKNN log level (3 = warnings and up)
-# ----------------------------------------------------------------------
+# RKNN log level (3 = warnings and up)
 os.environ["RKNN_LOG_LEVEL"] = "3"
 
-# ----------------------------------------------------------------------
-#  Front-end constants  (IDRnD defaults)
-# ------------------------------------------------------------------
+# ───────────────────────── Front-end constants (IDRnD) ─────────────────────────
 _PREEMPH  = 0.97
 _SR       = 16_000
 _N_FFT    = 512
@@ -35,169 +32,171 @@ _HOP      = 240
 _N_MELS   = 60
 _F_MIN    = 20.0
 _F_MAX    = 7_600.0
-_TARGET_T = 134
+_TARGET_T = 134       # target number of frames expected by the model
 _EPS      = 1e-6
 
-# ------------------------------------------------------------------
-#  DSP helpers
-# ------------------------------------------------------------------
+# ─────────────────────────── DSP helper functions ────────────────────────────
 def preemphasis(wave: np.ndarray, alpha: float = _PREEMPH) -> np.ndarray:
-    """ y[n] = x[n] − α·x[n−1]   (first sample unchanged) """
-    out = wave.copy()
-    out[1:] -= alpha * wave[:-1]
+    out = wave.astype(np.float32, copy=True)
+    if out.size > 1:
+        out[1:] -= alpha * out[:-1]
     return out
 
+def hz_to_mel(hz):
+    hz = np.asanyarray(hz, dtype=np.float64)
+    return 2595.0 * np.log10(1.0 + hz / 700.0)
 
-def hz_to_mel(hz: np.ndarray | float) -> np.ndarray | float:
-    """HTK mel conversion (same as torchaudio MelScale default)"""
-    return 2595.0 * np.log10(1.0 + np.asanyarray(hz) / 700.0)
+def mel_to_hz(mel):
+    mel = np.asanyarray(mel, dtype=np.float64)
+    return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
 
-
-def mel_to_hz(mel: np.ndarray | float) -> np.ndarray | float:
-    return 700.0 * (10.0 ** (np.asanyarray(mel) / 2595.0) - 1.0)
-
-
-def mel_filterbank(sr: int              = _SR,
-                   n_fft: int           = _N_FFT,
-                   n_mels: int          = _N_MELS,
-                   f_min: float         = _F_MIN,
-                   f_max: float         = _F_MAX) -> np.ndarray:
-    """
-    Return triangular filterbank of shape (n_mels, n_fft//2 + 1)
-    matching torchaudio’s default (HTK formula).
-    """
-    mel_pts = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels + 2)
+def mel_filterbank(sr=_SR, n_fft=_N_FFT, n_mels=_N_MELS,
+                   fmin=_F_MIN, fmax=_F_MAX) -> np.ndarray:
+    mel_pts = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_mels + 2)
     hz_pts  = mel_to_hz(mel_pts)
     bins    = np.floor((n_fft + 1) * hz_pts / sr).astype(int)
 
-    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float16)
+    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
     for i in range(1, n_mels + 1):
         left, center, right = bins[i - 1], bins[i], bins[i + 1]
-        right = min(right, fb.shape[1] - 1)              # safety clip
-
-        # rising slope
+        right = min(right, fb.shape[1] - 1)
         if center > left:
-            fb[i - 1, left:center] = (
-                np.arange(left, center) - left) / (center - left)
-        # falling slope
+            fb[i - 1, left:center] = (np.arange(left, center) - left) / (center - left)
         if right > center:
-            fb[i - 1, center:right] = (
-                right - np.arange(center, right)) / (right - center)
-    return fb
+            fb[i - 1, center:right] = (right - np.arange(center, right)) / (right - center)
+    return fb.astype(np.float16)
 
+# Precompute filterbank and window once
+_MEL_FB = mel_filterbank()
+_WINDOW = np.pad(get_window("hamming", _WIN_LEN, fftbins=True).astype(np.float32),
+                 (0, _N_FFT - _WIN_LEN))
 
-# Pre-compute once – reuse for every clip
-_MEL_FB  = mel_filterbank()
-_WINDOW  = get_window("hamming", _WIN_LEN, fftbins=True).astype(np.float16)
-_WINDOW  = np.pad(_WINDOW, (0, _N_FFT - _WIN_LEN))       # zero-pad to n_fft
-
-
-# ------------------------------------------------------------------
-#  Waveform → log-Mel (NumPy implementation of your PyTorch logic)
-# ------------------------------------------------------------------
+# ───────────────────────────── Wave → log-Mel ───────────────────────────────
 def waveform_to_logmel(wave: np.ndarray) -> np.ndarray:
     """
-    Parameters
-    ----------
-    wave : np.ndarray  shape (N,) – mono 16-kHz waveform
-
-    Returns
-    -------
-    logmel : np.ndarray  shape (1, 1, 60, 200)  (NCHW float16)
+    Input:  wave (N,) mono 16k PCM
+    Output: (1, 1, 60, _TARGET_T) float16 (NCHW)
     """
     # 1) pre-emphasis
-    wave = preemphasis(wave, _PREEMPH).astype(np.float16)
+    wave = preemphasis(wave).astype(np.float32)
 
-    # 2) reflection pad to mimic torch.stft(center=True)
+    # 2) reflection pad (centered STFT like torch.stft(center=True))
     pad = _N_FFT // 2
     wave_padded = np.pad(wave, (pad, pad), mode="reflect")
 
-    # 3) frame-by-frame STFT power
+    # 3) STFT power
     frames = []
     for start in range(0, len(wave_padded) - _N_FFT + 1, _HOP):
         frame = wave_padded[start:start + _N_FFT] * _WINDOW
-        spec  = np.abs(rfft(frame, n=_N_FFT)) ** 2
-        frames.append(spec)
-
+        spec = np.abs(rfft(frame, n=_N_FFT)) ** 2
+        frames.append(spec.astype(np.float32))
     if not frames:
         raise RuntimeError("❌ Audio too short for one FFT frame")
 
-    spec = np.stack(frames, axis=1, dtype=np.float16)            # [freq, T]
+    spec = np.stack(frames, axis=1)  # [freq, T]
 
     # 4) Mel projection
-    mel = _MEL_FB @ spec                                           # [60, T]
+    mel = _MEL_FB @ spec             # [60, T]
 
-    # 5) log (natural)
-    logmel = np.log(mel + _EPS, dtype=np.float16)
-
-    # 6) mean normalisation (per mel bin)
+    # 5) log + mean norm
+    logmel = np.log(mel + _EPS)
     logmel -= logmel.mean(axis=1, keepdims=True)
 
-    # 7) pad / crop to exactly 200 frames
+    # 6) pad/crop to target T
     T = logmel.shape[1]
     if T < _TARGET_T:
         logmel = np.pad(logmel, ((0, 0), (0, _TARGET_T - T)), mode="constant")
-        print(f"[INFO] Padding log_mel from {T} → {_TARGET_T} frames")
+        print(f"[INFO] Padding log-mel {T} → {_TARGET_T} frames")
     elif T > _TARGET_T:
         start = (T - _TARGET_T) // 2
         logmel = logmel[:, start:start + _TARGET_T]
-        print(f"[INFO] Cropping log_mel from {T} → {_TARGET_T} frames")
+        print(f"[INFO] Cropping log-mel {T} → {_TARGET_T} frames")
 
-    # 8) return [1, 1, 60, 134] (NCHW)
+    # [1,1,60,T] float16
     return logmel[np.newaxis, np.newaxis, :, :].astype(np.float16)
 
-
-# ------------------------------------------------------------------
-#  RKNN inference wrapper
-# ------------------------------------------------------------------
-def run_inference_rknn(rknn_path: str, wav_path: str):
-    print("[1/4] Loading RKNN model …")
-    rk = RKNN()
-    
-    if rk.load_rknn(rknn_path) != 0:
-        raise RuntimeError("❌ Failed to load RKNN file")
-
-    print("[2/4] Initialising runtime …")
-    if rk.init_runtime(target="rk3588") != 0:
-        raise RuntimeError("❌ Failed to initialise RKNN runtime")
-
-    # ------------------------------------------------------------------
-    #  Audio I/O  → log-Mel
-    # ------------------------------------------------------------------
-    print("[3/4] Pre-processing audio …")
-    wave, sr = sf.read(wav_path, always_2d=False)    # mono or stereo
-    if wave.ndim > 1:                                # stereo → mono
+# ───────────────────────────── Audio I/O helper ─────────────────────────────
+def load_mono_16k(path: str) -> np.ndarray:
+    wave, sr = sf.read(path, always_2d=False)
+    if wave.ndim > 1:
         wave = wave.mean(axis=1)
-
     if sr != _SR:
-        print(f"[INFO] Resampling {sr} → {_SR} Hz")
-        duration = len(wave) / sr
-        wave = resample(wave, int(duration * _SR))
-        sr = _SR
+        # resample by length ratio to preserve duration
+        target_len = int(len(wave) * (_SR / sr))
+        print(f"[INFO] Resampling {sr} → {_SR} Hz (len {len(wave)} → {target_len})")
+        wave = resample(wave, target_len)
+    return wave.astype(np.float32, copy=False)
 
-    logmel_nchw = waveform_to_logmel(wave)           # [1,1,60,200]
+# ───────────────────────────── RKNN helpers ────────────────────────────────
+def init_rknn(model_path: str, target: str) -> RKNN:
+    print(f"[1/3] Loading RKNN model: {model_path}")
+    rk = RKNN()
+    if rk.load_rknn(model_path) != 0:
+        raise RuntimeError("❌ Failed to load RKNN file")
+    print(f"[2/3] Initialising runtime: {target}")
+    if rk.init_runtime(target=target) != 0:
+        raise RuntimeError("❌ Failed to initialise RKNN runtime")
+    return rk
 
-    # ------------------------------------------------------------------
-    #  Inference
-    # ------------------------------------------------------------------
-    print("[4/4] Running inference …")
-    outputs = rk.inference(inputs=[logmel_nchw], data_format='nchw' )
-    rk.release()
+def infer_embedding(rk: RKNN, wav_path: str) -> np.ndarray:
+    wave = load_mono_16k(wav_path)
+    logmel = waveform_to_logmel(wave)         # [1,1,60,_TARGET_T], float16
+    out = rk.inference(inputs=[logmel], data_format='nchw')
+    emb = out[0]
+    return np.asarray(emb)
 
-    emb = outputs[0]
-    print(f"\n[DEBUG] Embedding stats – shape {emb.shape}  "
-          f"min={emb.min():.4f}  max={emb.max():.4f}")
-    print("Sample values:", emb[0, :10])
+# ───────────────────────────── Similarity ──────────────────────────────────
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.astype(np.float32).ravel()
+    b = b.astype(np.float32).ravel()
+    denom = (np.linalg.norm(a) * np.linalg.norm(b)) + _EPS
+    return float(np.dot(a, b) / denom)
 
-    return emb
+# ──────────────────────────────── Main ─────────────────────────────────────
+def main():
+    ap = argparse.ArgumentParser(
+        description="RKNN inference for ReDimNet-NoMel (single embed or pairwise verify)")
+    ap.add_argument("model", help="Path to .rknn model file")
+    ap.add_argument("wav1",  help="Path to first WAV file")
+    ap.add_argument("wav2",  nargs="?", help="Optional second WAV (enables verification)")
+    ap.add_argument("--target", default="rk3588", help="RKNN target (default: rk3588)")
+    ap.add_argument("--out", help="When using single-file mode, save embedding to .npy")
+    args = ap.parse_args()
 
+    rk = init_rknn(args.model, args.target)
 
-# ------------------------------------------------------------------
-#  CLI entry-point
-# ------------------------------------------------------------------
+    try:
+        if args.wav2 is None:
+            # Single-file inference
+            print("[3/3] Running embedding inference …")
+            emb = infer_embedding(rk, args.wav1)
+            rk.release()
+
+            print(f"\n✅ Embedding produced: shape={emb.shape}, dtype={emb.dtype}")
+            print(f"   min={emb.min():.6f}  max={emb.max():.6f}")
+            flat = emb.ravel()
+            print("   first 10 values:", np.array2string(flat[:10], precision=6, separator=", "))
+
+            if args.out:
+                np.save(args.out, emb)
+                print(f"💾 Saved embedding to {args.out}")
+        else:
+            # Two-file verification
+            print("[3/3] Extracting embeddings …")
+            emb1 = infer_embedding(rk, args.wav1)
+            emb2 = infer_embedding(rk, args.wav2)
+            rk.release()
+
+            sim = cosine_similarity(emb1, emb2)
+            print("\n✅ Cosine Similarity:", f"{sim:.6f}")
+            print("🔎 Distance (1 - sim):", f"{1.0 - sim:.6f}")
+
+    finally:
+        # Safety in case of early exceptions
+        try:
+            rk.release()
+        except Exception:
+            pass
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print(__doc__)
-        sys.exit(1)
-
-    run_inference_rknn(sys.argv[1], sys.argv[2])
+    main()

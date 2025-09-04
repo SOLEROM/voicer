@@ -5,47 +5,76 @@ RKNN model, using the same NumPy/SciPy front-end as `inference_rknn.py`.
 
 Usage
 -----
-python live_compare_rknn.py  model.rknn  reference.wav  [rk3588]  [chunk_secs]
+python live_compare_rknn.py  model.rknn  reference.wav  [rk3588]  [chunk_secs]  [modelB2|modelB0]  [debug]
+
+Notes
+-----
+- model variant controls number of Mel bands:
+    * modelB2 → 72 mels
+    * modelB0 → 60 mels
+- debug mode (on/off) can be set via:
+    * the optional trailing CLI arg "debug" (any case), or
+    * environment variable DEBUG=1
+  When debug mode is ON:
+    * RKNN runtime is initialized with perf_debug=True
+    * Inference time per chunk is measured and printed
 """
 
 # ───────────────────────── Imports ─────────────────────────
 import os
 import sys
+import time
+import enum
 import numpy as np
 import sounddevice as sd
 import soundfile  as sf
+from functools import lru_cache
 from scipy.signal import get_window, resample
 from numpy.fft    import rfft
 from rknn.api     import RKNN
 
 # os.environ['RKNN_LOG_LEVEL'] = '3'        # warnings and up only
 
+# ─────────────────── Model variant enum ───────────────────
+class ModelVariant(enum.Enum):
+    modelB2 = 72
+    modelB0 = 60
+
+    @staticmethod
+    def from_string(s: str) -> "ModelVariant":
+        s = (s or "").strip().lower()
+        if s in ("modelb2", "b2"):
+            return ModelVariant.modelB2
+        if s in ("modelb0", "b0"):
+            return ModelVariant.modelB0
+        # default fallback
+        return ModelVariant.modelB2
+
 # ─────────────────── MIC SRC    ───────────────────
-def set_input_device(preferred_name="ReSpeaker", fallback_id=0):
+def set_input_device(preferred_name="ReSpeaker", fallback_id=0, verbose=True):
     try:
-        print(f"🔍 Searching for input device containing: '{preferred_name}'")
+        if verbose:
+            print(f"🔍 Searching for input device containing: '{preferred_name}'")
         devices = sd.query_devices()
         input_devices = [(i, d) for i, d in enumerate(devices) if d['max_input_channels'] > 0]
 
         for idx, device in input_devices:
             if preferred_name.lower() in device['name'].lower():
                 sd.default.device = (idx, None)
-                print(f"✅ Using input device #{idx}: {device['name']}")
-                return
-
-        # If not found
-        print(f"⚠️ '{preferred_name}' not found. Falling back to device #{fallback_id}: {devices[fallback_id]['name']}")
-        sd.default.device = (fallback_id, None)
+                if verbose:
+                    print(f"✅ Using input device #{idx}: {device['name']}")
+                break
+        else:
+            if verbose:
+                print(f"⚠️ '{preferred_name}' not found. Falling back to device #{fallback_id}: {devices[fallback_id]['name']}")
+            sd.default.device = (fallback_id, None)
 
     except Exception as e:
         print(f"❌ Error setting input device. Falling back to #{fallback_id}. Error: {e}")
         sd.default.device = (fallback_id, None)
 
-    print("🎙️ Final input device:", sd.query_devices(sd.default.device[0])['name'])
-
-# Example usage:
-set_input_device("ReSpeaker", fallback_id=4)
-print(sd.query_devices())
+    if verbose:
+        print("🎙️ Final input device:", sd.query_devices(sd.default.device[0])['name'])
 
 # ─────────────────── Front-end constants (IDRnD) ───────────────────
 _PREEMPH  = 0.97
@@ -53,7 +82,7 @@ _SR       = 16_000
 _N_FFT    = 512
 _WIN_LEN  = 400
 _HOP      = 240
-_N_MELS   = 72
+# _N_MELS is now selected via ModelVariant (see enum above)
 _F_MIN    = 20.0
 _F_MAX    = 7_600.0
 _TARGET_T = 134                           # frames used by ReDimNet-NoMel
@@ -74,9 +103,12 @@ def mel_to_hz(mel):
     return 700.0 * (10.0**(np.asanyarray(mel) / 2595.0) - 1.0)
 
 
-def mel_filterbank(sr=_SR, n_fft=_N_FFT, n_mels=_N_MELS,
-                   f_min=_F_MIN, f_max=_F_MAX) -> np.ndarray:
-    """Triangular filterbank matching torchaudio defaults (HTK)."""
+@lru_cache(maxsize=8)
+def mel_filterbank_cached(sr=_SR, n_fft=_N_FFT, n_mels=72,
+                          f_min=_F_MIN, f_max=_F_MAX) -> np.ndarray:
+    """Triangular filterbank matching torchaudio defaults (HTK).
+    Cached per (sr, n_fft, n_mels, f_min, f_max).
+    """
     mel_pts = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels + 2)
     hz_pts  = mel_to_hz(mel_pts)
     bins    = np.floor((n_fft + 1) * hz_pts / sr).astype(int)
@@ -95,16 +127,16 @@ def mel_filterbank(sr=_SR, n_fft=_N_FFT, n_mels=_N_MELS,
     return fb
 
 
-# Pre-compute static components once
-_MEL_FB = mel_filterbank()
+# Pre-compute static window once (independent of n_mels)
 _WINDOW = get_window('hamming', _WIN_LEN, fftbins=True).astype(np.float16)
 _WINDOW = np.pad(_WINDOW, (0, _N_FFT - _WIN_LEN))      # zero-pad to n_fft
 
 
 def waveform_to_logmel(wave: np.ndarray,
+                       n_mels: int,
                        target_frames=_TARGET_T) -> np.ndarray:
     """
-    Convert mono 16-kHz waveform → log-Mel tensor [1,1,60,target_frames].
+    Convert mono 16-kHz waveform → log-Mel tensor [1,1,n_mels,target_frames].
     All maths in float16 to save RAM/BW like on RK NPU.
     """
     # 1) pre-emphasis
@@ -126,7 +158,8 @@ def waveform_to_logmel(wave: np.ndarray,
     spec = np.stack(frames, axis=1, dtype=np.float16)   # [freq, T]
 
     # 4) Mel projection
-    mel = _MEL_FB @ spec                               # [60, T]
+    fb  = mel_filterbank_cached(_SR, _N_FFT, n_mels, _F_MIN, _F_MAX)
+    mel = fb @ spec                                     # [n_mels, T]
 
     # 5) natural log + per-bin mean normalisation
     logmel = np.log(mel + _EPS, dtype=np.float16)
@@ -141,7 +174,7 @@ def waveform_to_logmel(wave: np.ndarray,
         start = (T - target_frames) // 2
         logmel = logmel[:, start:start + target_frames]
 
-    # 7) NCHW for ReDimNet-NoMel: [B, C, H, W] = [1,1,60,T]
+    # 7) NCHW for ReDimNet-NoMel: [B, C, H, W] = [1,1,n_mels,T]
     return logmel[np.newaxis, np.newaxis].astype(np.float16)
 
 # ─────────────────── Embedding helpers ───────────────────
@@ -151,31 +184,54 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
                  (np.linalg.norm(a) * np.linalg.norm(b) + _EPS))
 
 
-def extract_embedding(rknn: RKNN, wave: np.ndarray, sr: int) -> np.ndarray:
+def extract_embedding(rknn: RKNN, wave: np.ndarray, sr: int,
+                      n_mels: int,
+                      debug: bool = False) -> np.ndarray:
     """Resample if needed, run front-end and RKNN inference, return embedding."""
     if sr != _SR:
         duration = len(wave) / sr
         wave = resample(wave, int(duration * _SR))
-    logmel = waveform_to_logmel(wave)                  # [1,1,60,200]
-    return rknn.inference(inputs=[logmel], data_format='nchw')[0]
+    logmel = waveform_to_logmel(wave, n_mels=n_mels)  # [1,1,n_mels,T]
+
+    if debug:
+        start = time.time()
+        out = rknn.inference(inputs=[logmel], data_format='nchw')[0]
+        end = time.time()
+        print(f"Inference time: {(end - start)*1000:.2f} ms")
+    else:
+        out = rknn.inference(inputs=[logmel], data_format='nchw')[0]
+
+    return out
 
 # ─────────────────── Main loop ───────────────────
 def listen_and_compare(rknn_path: str,
                        ref_wav:  str,
                        target:   str  = 'rk3588',
-                       chunk_s:  int  = 1):
+                       chunk_s:  int  = 2,
+                       variant:  ModelVariant = ModelVariant.modelB2,
+                       debug:    bool = False):
     print(f'🧠 Loading RKNN model: {rknn_path}')
     rk = RKNN()
     if rk.load_rknn(rknn_path) != 0:
         sys.exit('load_rknn failed')
-    if rk.init_runtime(target=target) != 0:
+
+    # if debug, set RKNN_LOG_LEVEL high
+    if bool(debug):
+        print("⚙️ Setting RKNN_LOG_LEVEL=5")
+        os.environ['RKNN_LOG_LEVEL'] = '5'
+
+    # perf_debug only when debug mode is ON
+    if rk.init_runtime(target=target, perf_debug=bool(debug)) != 0:
         sys.exit('init_runtime failed')
+
+    n_mels = variant.value
+    print(f'🎚️ Using model variant {variant.name} with n_mels={n_mels}')
 
     print(f'🎧 Loading reference clip: {ref_wav}')
     ref_wave, ref_sr = sf.read(ref_wav, always_2d=False)
     if ref_wave.ndim > 1:
         ref_wave = ref_wave.mean(axis=1)
-    ref_emb = extract_embedding(rk, ref_wave, ref_sr)
+    ref_emb = extract_embedding(rk, ref_wave, ref_sr, n_mels=n_mels, debug=debug)
 
     sd.default.samplerate = _SR        # record natively at 16 kHz
     sd.default.channels   = 1
@@ -188,7 +244,7 @@ def listen_and_compare(rknn_path: str,
             rec = sd.rec(frames_per_chunk, dtype='float32')
             sd.wait()
             mic_wave = rec[:, 0]                      # 1-D mono
-            mic_emb  = extract_embedding(rk, mic_wave, _SR)
+            mic_emb  = extract_embedding(rk, mic_wave, _SR, n_mels=n_mels, debug=debug)
             sim      = cosine_similarity(ref_emb, mic_emb)
             print(f'🧭 Cosine similarity: {sim:.4f}   (distance = {1-sim:.4f})')
     except KeyboardInterrupt:
@@ -197,16 +253,39 @@ def listen_and_compare(rknn_path: str,
         rk.release()
 
 # ─────────────────── CLI entry-point ───────────────────
+def _env_debug_on() -> bool:
+    v = os.environ.get("DEBUG", "").strip()
+    return v in ("1", "true", "True", "YES", "yes")
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
 
+    rknn_model    = sys.argv[1]
+    reference_wav = sys.argv[2]
+    target_hw     = sys.argv[3] if len(sys.argv) > 3 else 'rk3588'
+    chunk_secs    = int(sys.argv[4]) if len(sys.argv) > 4 else 2
+    variant_arg   = sys.argv[5] if len(sys.argv) > 5 else None
+    debug_arg     = sys.argv[6] if len(sys.argv) > 6 else None
 
+    # Determine model variant
+    model_variant = ModelVariant.from_string(variant_arg)
 
-    rknn_model   = sys.argv[1]
-    reference_wav= sys.argv[2]
-    target_hw    = sys.argv[3] if len(sys.argv) > 3 else 'rk3588'
-    chunk_secs   = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    # Determine debug mode (CLI arg "debug" OR env DEBUG=1/true)
+    debugMode = _env_debug_on() or (str(debug_arg).lower() == "debug")
 
-    listen_and_compare(rknn_model, reference_wav, target_hw, chunk_secs)
+    # Select input device (same behavior as before; quiet unless debug)
+    set_input_device("ReSpeaker", fallback_id=4, verbose=debugMode)
+    if debugMode:
+        # Show device table only when debugging
+        print(sd.query_devices())
+
+    listen_and_compare(
+        rknn_model,
+        reference_wav,
+        target_hw,
+        chunk_secs,
+        variant=model_variant,
+        debug=debugMode
+    )
